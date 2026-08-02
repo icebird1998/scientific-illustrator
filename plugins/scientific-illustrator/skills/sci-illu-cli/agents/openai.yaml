@@ -1,0 +1,4 @@
+interface:
+  display_name: "sci-illu CLI Reference"
+  short_description: "Command reference for the sci-illu CLI front end"
+  default_prompt: "Use $sci-illu-cli to look up exact sci-illu command shapes, tool mappings, flags, and platform notes before invoking any Scientific Illustrator capability from the shell."

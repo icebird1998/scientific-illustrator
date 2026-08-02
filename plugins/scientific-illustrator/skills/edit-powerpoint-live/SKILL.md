@@ -5,6 +5,14 @@ description: Connect to, inspect, create, reconstruct, or edit a Microsoft Power
 
 # Edit PowerPoint or WPS Presentation
 
+> **Execution backends.** Tool names such as `powerpoint_add_shape` are MCP
+> tools in Codex and equivalent `sci-illu` CLI commands elsewhere:
+> `sci-illu ppt add-shape --backend <auto|officejs|com|ooxml> --json '<args>'`.
+> The Office.js backend runs through a daemon (`sci-illu ppt serve`, or
+> auto-started on the first `--backend officejs` call; stop with
+> `sci-illu ppt stop`). COM (Windows) and OOXML calls are one-shot processes.
+> See `$sci-illu-cli` for the full reference.
+
 Act as the presentation Drawer in the four-role Scientific Illustrator protocol. Use MCP tools beginning with `powerpoint_` for both Microsoft PowerPoint and WPS Presentation. Match the draw.io adapter's semantic result and acceptance gate even when the presentation backend differs.
 
 ## Select the host backend

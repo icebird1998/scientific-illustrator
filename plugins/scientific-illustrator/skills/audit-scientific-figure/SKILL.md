@@ -5,6 +5,12 @@ description: Review and score an existing scientific illustration in visible dra
 
 # Audit Scientific Figure
 
+> **Execution backends.** Tool names such as `drawio_live_audit_figure` or
+> `powerpoint_audit_figure` are MCP tools in Codex and equivalent `sci-illu`
+> CLI commands elsewhere: `sci-illu live audit-figure`,
+> `sci-illu ppt audit-figure --json '<args>'`. Arguments keep the MCP shape
+> when passed with `--json`. See `$sci-illu-cli` for the full reference.
+
 Act as the Reviewer. Review read-only evidence and issue findings; do not draw during the review phase. A successful MCP call is not evidence that the figure is visually or structurally correct.
 
 ## Collect both evidence channels

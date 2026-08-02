@@ -85,7 +85,7 @@ try {
   const health = await requestJson(started.port, "GET", "/health");
   assert.equal(health.status, 200);
   assert.equal(health.value.ok, true);
-  assert.equal(health.value.version, "1.5.3");
+  assert.equal(health.value.version, "1.6.0");
 
   for (const icon of ["icon-32.png", "icon-64.png"]) {
     const asset = await requestAsset(started.port, `/assets/${icon}`);

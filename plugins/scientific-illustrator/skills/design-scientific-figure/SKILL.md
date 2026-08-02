@@ -5,6 +5,12 @@ description: Design a new scientific illustration, graphical abstract, workflow,
 
 # Design Scientific Figure
 
+> **Execution backends.** Tool names such as `drawio_live_add_shape` or
+> `powerpoint_add_shape` are MCP tools in Codex and equivalent `sci-illu`
+> CLI commands elsewhere: `sci-illu live add-shape`,
+> `sci-illu ppt add-shape --json '<args>'`. Arguments keep the MCP shape
+> when passed with `--json`. See `$sci-illu-cli` for the full reference.
+
 Act as the Designer in the four-role Scientific Illustrator protocol. Produce a backend-neutral design specification before the Drawer adds any object. The selected backend affects object mapping, not the design quality or acceptance gate.
 
 ## Detect constraints

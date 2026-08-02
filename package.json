@@ -1,12 +1,13 @@
 {
   "name": "scientific-illustrator-marketplace",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "private": true,
   "description": "Validation helpers for the Scientific Illustrator Codex plugin marketplace.",
   "type": "module",
   "scripts": {
-    "check": "node --check plugins/scientific-illustrator/scripts/drawio-path.mjs && node --check plugins/scientific-illustrator/scripts/live-server.mjs && node --check plugins/scientific-illustrator/scripts/server.mjs && node --check plugins/scientific-illustrator/scripts/powerpoint-server.mjs && node --check plugins/scientific-illustrator/scripts/officejs-bridge.mjs && node --check plugins/scientific-illustrator/scripts/officejs-setup.mjs && node --check plugins/scientific-illustrator/officejs/taskpane.js && node --check scripts/compile-python.mjs && node --check scripts/platform-compat-smoke.mjs && node scripts/compile-python.mjs && node scripts/validate-repo.mjs",
-    "test": "node --run check && node scripts/smoke-test.mjs && node scripts/officejs-bridge-smoke.mjs && node scripts/focus-policy-smoke.mjs && node scripts/platform-compat-smoke.mjs && node scripts/wps-reliability-smoke.mjs",
+    "check": "node --check plugins/scientific-illustrator/scripts/drawio-path.mjs && node --check plugins/scientific-illustrator/scripts/live-server.mjs && node --check plugins/scientific-illustrator/scripts/server.mjs && node --check plugins/scientific-illustrator/scripts/powerpoint-server.mjs && node --check plugins/scientific-illustrator/scripts/officejs-bridge.mjs && node --check plugins/scientific-illustrator/scripts/officejs-setup.mjs && node --check plugins/scientific-illustrator/scripts/cli.mjs && node --check plugins/scientific-illustrator/officejs/taskpane.js && node --check scripts/compile-python.mjs && node --check scripts/platform-compat-smoke.mjs && node --check scripts/cli-smoke-test.mjs && node scripts/compile-python.mjs && node scripts/validate-repo.mjs",
+    "test": "node --run check && node scripts/smoke-test.mjs && node scripts/officejs-bridge-smoke.mjs && node scripts/focus-policy-smoke.mjs && node scripts/platform-compat-smoke.mjs && node scripts/wps-reliability-smoke.mjs && node scripts/cli-smoke-test.mjs",
+    "cli:test": "node scripts/cli-smoke-test.mjs",
     "officejs:status": "node plugins/scientific-illustrator/scripts/officejs-setup.mjs status",
     "officejs:prepare": "node plugins/scientific-illustrator/scripts/officejs-setup.mjs prepare",
     "officejs:sideload": "node plugins/scientific-illustrator/scripts/officejs-setup.mjs sideload"

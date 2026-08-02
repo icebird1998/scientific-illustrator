@@ -28,7 +28,7 @@ const mcp = JSON.parse(await fs.readFile(mcpPath, "utf8"));
 if (entry.name !== manifest.name || manifest.name !== "scientific-illustrator") {
   throw new Error("Marketplace and manifest plugin names differ.");
 }
-if (manifest.version !== "1.5.3") throw new Error("Unexpected public release version.");
+if (manifest.version !== "1.6.0") throw new Error("Unexpected public release version.");
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
   throw new Error("Manifest version is not valid semantic versioning.");
 }

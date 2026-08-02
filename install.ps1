@@ -87,6 +87,21 @@ Assert-NativeSuccess "Registering the Scientific Illustrator marketplace"
 codex plugin add $Plugin
 Assert-NativeSuccess "Installing the Scientific Illustrator plugin"
 
+# Install the sci-illu CLI shim so any agent or terminal can use it.
+$BinDir = if ($env:SCI_ILLU_BIN_DIR) { $env:SCI_ILLU_BIN_DIR } else { Join-Path $HOME ".local\bin" }
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+$CliShim = Join-Path $BinDir "sci-illu.cmd"
+$CliPath = Join-Path $InstallDir "plugins\scientific-illustrator\scripts\cli.mjs"
+if (Test-Path $CliShim) {
+  Write-Host "sci-illu CLI: $CliShim already exists."
+} else {
+  Set-Content -Path $CliShim -Value "@echo off`r`nnode `"$CliPath`" %*`r`n" -Encoding ASCII
+  Write-Host "sci-illu CLI: $CliShim"
+  if ($env:PATH -notlike "*$BinDir*") {
+    Write-Host "Add $BinDir to PATH if it is not already there."
+  }
+}
+
 Write-Host "Installed $Plugin"
 Write-Host "Restart Codex and start a new task before first use."
 Write-Host "Windows PowerPoint uses COM; Windows WPS uses the editable PPTX OOXML backend."

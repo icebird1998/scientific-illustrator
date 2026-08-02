@@ -9,7 +9,7 @@ import net from "node:net";
 import { drawioInstallHint, resolveDrawioExecutable } from "./drawio-path.mjs";
 
 const SERVER_NAME = "drawio-live";
-const SERVER_VERSION = "1.5.3";
+const SERVER_VERSION = "1.6.0";
 const DRAWIO = resolveDrawioExecutable();
 const DEFAULT_PORT = Number(process.env.DRAWIO_LIVE_PORT || 9333);
 const PROFILE_ROOT = process.env.DRAWIO_LIVE_PROFILE || path.join(os.homedir(), ".drawio-live-mcp");

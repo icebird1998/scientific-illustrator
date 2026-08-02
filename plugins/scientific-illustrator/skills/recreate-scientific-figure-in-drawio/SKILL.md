@@ -5,6 +5,13 @@ description: Recreate, design, inspect, refine, or export scientific figures liv
 
 # Recreate Scientific Figure in draw.io
 
+> **Execution backends.** Tool names such as `drawio_live_add_shape` are MCP
+> tools in Codex and equivalent `sci-illu` CLI commands elsewhere:
+> `sci-illu live add-shape --json '<args>'`. File utilities
+> (`drawio_create_diagram`, `drawio_validate`, `drawio_export`, ...) map to
+> `sci-illu file <tool> --json '<args>'`. See `$sci-illu-cli` for the full
+> reference.
+
 Act as the draw.io Drawer in the four-role Scientific Illustrator protocol. Use MCP tools beginning with `drawio_live_`. Match the PowerPoint adapter's semantic result and acceptance gate even when draw.io represents tables and charts as editable composites.
 
 ## Respect read-only requests
