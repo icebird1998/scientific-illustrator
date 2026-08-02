@@ -2,6 +2,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -1298,3 +1299,69 @@ rl.on("line", (line) => {
 
 process.on("uncaughtException", (error) => process.stderr.write(`[${SERVER_NAME}] ${error.stack || error.message}\n`));
 process.on("unhandledRejection", (error) => process.stderr.write(`[${SERVER_NAME}] ${error?.stack || error}\n`));
+
+// ---------------------------------------------------------------------------
+// HTTP JSON-RPC mode (used by the sci-illu CLI's Office.js daemon)
+//
+// When SCI_ILLU_HTTP=host:port is set, the server also listens on that
+// localhost port and accepts JSON-RPC 2.0 messages over HTTP. This keeps the
+// ppt bridge (Office.js task pane connection, certificate, session token)
+// alive across CLI invocations; the stdio MCP path above is unchanged and
+// remains the Codex integration point.
+// ---------------------------------------------------------------------------
+
+const httpBind = String(process.env.SCI_ILLU_HTTP || "").trim();
+if (httpBind) {
+  const separator = httpBind.lastIndexOf(":");
+  const host = separator > 0 ? httpBind.slice(0, separator) : "127.0.0.1";
+  const port = Number(httpBind.slice(separator + 1));
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      const body = JSON.stringify({
+        ok: true,
+        version: SERVER_VERSION,
+        name: SERVER_NAME,
+        pid: process.pid,
+        started_at: new Date().toISOString(),
+        backend: "officejs-bridge-host",
+      });
+      response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
+      response.end(body);
+      return;
+    }
+    if (request.method !== "POST") {
+      const out = JSON.stringify(rpcError(null, -32600, "Method not allowed"));
+      response.writeHead(405, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(out) });
+      response.end(out);
+      return;
+    }
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    let message;
+    try {
+      message = JSON.parse(body);
+    } catch (error) {
+      const out = JSON.stringify(rpcError(null, -32700, "Parse error", error.message));
+      response.writeHead(400, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(out) });
+      response.end(out);
+      return;
+    }
+    try {
+      const result = await handleMessage(message);
+      const out = JSON.stringify(result ?? { jsonrpc: "2.0", id: message.id ?? null, result: null });
+      response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(out) });
+      response.end(out);
+    } catch (error) {
+      const out = JSON.stringify(rpcError(message?.id, -32603, "Internal error", error.message));
+      response.writeHead(500, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(out) });
+      response.end(out);
+    }
+  });
+  server.listen(port, host, () => {
+    process.stderr.write(`[${SERVER_NAME}] HTTP JSON-RPC listening on http://${host}:${port}\n`);
+  });
+  server.on("error", (error) => {
+    process.stderr.write(`[${SERVER_NAME}] HTTP server error: ${error.stack || error.message}\n`);
+    process.exit(1);
+  });
+}
