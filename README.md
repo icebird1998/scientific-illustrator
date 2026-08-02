@@ -151,10 +151,57 @@ node plugins/scientific-illustrator/scripts/officejs-setup.mjs sideload
 
 </details>
 
+## 不使用 Codex：纯 CLI 使用（sci-illu）
+
+Codex 用户通过 MCP 工具使用本插件。**不使用 Codex 的 agent（pi、Claude Code、Cursor、Windsurf）以及纯命令行用户**，可以使用同名的 `sci-illu` CLI——每个子命令与一个 MCP 工具一一对应，参数形态完全一致。
+
+### 安装
+
+`install.sh` / `install.ps1` 会自动把 `sci-illu` 加入 PATH（可用 `SCI_ILLU_BIN_DIR` 指定目录）。也可以手动软链：
+
+~~~bash
+ln -s "$PWD/plugins/scientific-illustrator/scripts/cli.mjs" ~/.local/bin/sci-illu
+~~~
+
+### 用法
+
+~~~bash
+sci-illu <group> <tool> [flags]
+# group: file（draw.io 文件工具）| live（draw.io 实时画布）| ppt（PowerPoint / WPS）
+# 工具名支持 kebab-case（add-shape）或原始 MCP 名（drawio_live_add_shape）
+~~~
+
+命令示例：
+
+~~~bash
+# draw.io 实时绘制（draw.io Desktop 需已安装）
+sci-illu live launch
+sci-illu live add-shape --json '{"label":"box","shape":"rectangle","x":40,"y":40,"width":120,"height":60}'
+sci-illu live screenshot --output /tmp/figure.png
+sci-illu live audit-figure
+sci-illu live save-snapshot --json '{"output_path":"/tmp/figure.drawio"}'
+
+# draw.io 文件工具：创建、校验、导出
+sci-illu file create-diagram --json '{"output_path":"/tmp/f.drawio","workflow_context":"explicit-file-only-request"}'
+sci-illu file validate --json '{"input_path":"/tmp/f.drawio"}'
+sci-illu file export --json '{"input_path":"/tmp/f.drawio","format":"png"}'
+
+# PowerPoint / WPS（Linux 也可用 OOXML 后端生成可编辑 PPTX，需 python-pptx）
+sci-illu ppt status --backend ooxml
+sci-illu ppt add-shape --backend ooxml --json '{"slide_index":1,"shape_type":"rectangle","left":72,"top":72,"width":144,"height":72,"fill_color":"#F08705","text":"label"}'
+sci-illu ppt export-slide-image --backend ooxml --json '{"slide_index":1,"output_path":"/tmp/slide.png"}'
+sci-illu ppt save --backend ooxml --json '{"output_path":"/tmp/final.pptx"}'
+~~~
+
+输出约定：stdout 始终是单个 JSON（`ok` / `tool` / `result` / `images`）；成功退出码 0，工具失败 1，用法错误 2；截图等图片会写入文件（`--output` 指定路径）并在结果中报告路径。Mac PowerPoint 实时绘制的 Office.js 后端需要常驻桥，`sci-illu` 会自动管理守护进程（`sci-illu ppt serve` / `ppt stop`）。
+
+完整命令参考见 skill `sci-illu-cli`（仓库内 `plugins/scientific-illustrator/skills/sci-illu-cli/SKILL.md`），或在任意目录运行 `sci-illu help`。
+
 ## 版本更新
 
 | 版本 | 主要变化 |
 |---|---|
+| [v1.6.0](#) | 新增 `sci-illu` 纯 CLI 前端（Codex MCP 能力对 pi/Claude Code/Cursor 等 agent 与命令行可用）；Linux 全平台支持 draw.io 文件与实时画布；技能补充 CLI 映射与参考；新增 CLI 冒烟测试 |
 | [v1.5.3](https://github.com/icebird1998/scientific-illustrator/releases/tag/v1.5.3) | 修复双平台三软件兼容、连接状态和表格/图表/箭头更新；增加三平台 CI、真实打开验证及 draw.io 防伪形状检查 |
 | [v1.5.2](https://github.com/icebird1998/scientific-illustrator/releases/tag/v1.5.2) | 修复 Mac PowerPoint 实时加载项的图标格式，避免加载项被静默忽略 |
 | [v1.5.1](https://github.com/icebird1998/scientific-illustrator/releases/tag/v1.5.1) | 修复 PowerPoint/WPS 反复抢占窗口；默认可在后台绘制 |

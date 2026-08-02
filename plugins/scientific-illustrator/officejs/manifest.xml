@@ -5,7 +5,7 @@
   xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
   xsi:type="TaskPaneApp">
   <Id>17f06c41-8f7f-4a92-9dcf-571965576160</Id>
-  <Version>1.5.3.0</Version>
+  <Version>1.6.0.0</Version>
   <ProviderName>科研up主:进击的土博</ProviderName>
   <DefaultLocale>zh-CN</DefaultLocale>
   <DisplayName DefaultValue="Scientific Illustrator Live" />

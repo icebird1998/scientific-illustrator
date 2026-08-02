@@ -46,6 +46,24 @@ fi
 codex plugin marketplace add "$INSTALL_DIR"
 codex plugin add "$PLUGIN"
 
+# Install the sci-illu CLI into PATH so any agent or terminal can use it.
+BIN_DIR="${SCI_ILLU_BIN_DIR:-$HOME/.local/bin}"
+CLI_TARGET="$BIN_DIR/sci-illu"
+CLI_SOURCE="$INSTALL_DIR/plugins/scientific-illustrator/scripts/cli.mjs"
+if [[ "$(command -v sci-illu 2>/dev/null || true)" == "$CLI_TARGET" ]]; then
+  echo "sci-illu CLI: already installed at $CLI_TARGET"
+elif [[ -e "$CLI_TARGET" || -L "$CLI_TARGET" ]]; then
+  echo "sci-illu CLI: $CLI_TARGET already exists; leaving as-is (remove it to reinstall)" >&2
+else
+  mkdir -p "$BIN_DIR"
+  ln -s "$CLI_SOURCE" "$CLI_TARGET"
+  echo "sci-illu CLI: $CLI_TARGET"
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) echo "Add $BIN_DIR to PATH (e.g. export PATH=\"$BIN_DIR:\$PATH\")" >&2 ;;
+  esac
+fi
+
 echo "Installed $PLUGIN"
 echo "Restart Codex and start a new task before first use."
 echo "Windows PowerPoint uses COM; WPS and unconnected Mac PowerPoint use the editable PPTX OOXML backend."

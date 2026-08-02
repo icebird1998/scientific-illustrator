@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.0 — 2026-08-02
+
+- Added the `sci-illu` CLI front end: `sci-illu <group> <tool> --json '<args>'` maps 1:1 to the existing MCP tools (`file` → draw.io file utilities, `live` → draw.io live canvas, `ppt` → PowerPoint/WPS), speaking the same JSON-RPC stdio protocol so behavior is identical to the MCP path with no server refactoring.
+- Added an optional HTTP JSON-RPC listener to the PowerPoint server (`SCI_ILLU_HTTP=host:port`) that reuses the existing tool dispatch; the stdio MCP path is unchanged.
+- Added the ppt Office.js daemon lifecycle (`sci-illu ppt serve` / `stop`, auto-started for `--backend officejs`) so Mac PowerPoint live drawing keeps one persistent bridge instead of reloading the task pane on every call.
+- Made one-shot CLI invocations state-safe: a stable state dir (default `~/.local/state/sci-illu`) keeps OOXML working copies and daemon state across calls.
+- Defined a stable CLI output contract (stdout JSON with `ok`/`tool`/`result`/`images`, exit codes 0/1/2); screenshots and slide images are written to files and reported by path.
+- Updated all seven orchestration skills with an Execution backends note mapping MCP tool names to `sci-illu` commands, added the `sci-illu-cli` reference skill, and added a root `AGENTS.md` for agents that do not read skill directories.
+- Added `scripts/cli-smoke-test.mjs` (wired into `npm test` and CI) covering usage, exit codes, tool mapping, error propagation, image saving, and the daemon lifecycle; draw.io / python-pptx-gated sections skip gracefully.
+- `install.sh` / `install.ps1` now also install the `sci-illu` CLI into PATH.
+
 ## 1.5.3 — 2026-08-01
 
 - Fixed macOS WPS discovery for the localized application path, environment overrides, Bundle ID lookup, and exact main-process matching.
