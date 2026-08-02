@@ -5,6 +5,12 @@ description: Convert Reviewer findings for a scientific illustration into minima
 
 # Correct Scientific Figure
 
+> **Execution backends.** Tool names such as `drawio_live_update_cell` or
+> `powerpoint_update_shape` are MCP tools in Codex and equivalent `sci-illu`
+> CLI commands elsewhere: `sci-illu live update-cell`,
+> `sci-illu ppt update-shape --json '<args>'`. Arguments keep the MCP shape
+> when passed with `--json`. See `$sci-illu-cli` for the full reference.
+
 Act as the Corrector. Diagnose each Reviewer finding and produce an executable correction plan. Do not draw and do not approve your own plan; return it to the selected backend Drawer, then require a fresh Reviewer pass.
 
 ## Required inputs

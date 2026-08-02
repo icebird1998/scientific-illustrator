@@ -5,6 +5,12 @@ description: Recreate a supplied scientific figure, graphical abstract, workflow
 
 # Recreate Scientific Figure
 
+> **Execution backends.** Tool names such as `drawio_live_add_shape` or
+> `powerpoint_add_shape` are MCP tools in Codex and equivalent `sci-illu`
+> CLI commands elsewhere: `sci-illu live add-shape`,
+> `sci-illu ppt add-shape --json '<args>'`. Arguments keep the MCP shape
+> when passed with `--json`. See `$sci-illu-cli` for the full reference.
+
 Coordinate one backend-neutral four-role protocol. Keep the roles logically separate even when one agent performs all four. Let the user choose draw.io, Microsoft PowerPoint, or WPS Presentation; the choice changes the implementation, never the quality contract.
 
 Use `$recreate-scientific-figure-in-drawio` as the draw.io Drawer adapter and `$edit-powerpoint-live` as the PowerPoint/WPS Drawer adapter. Use `$audit-scientific-figure` as the Reviewer and `$correct-scientific-figure` as the Corrector.

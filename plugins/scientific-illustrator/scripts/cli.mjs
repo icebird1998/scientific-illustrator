@@ -247,6 +247,14 @@ async function renderResult(mcpTool, toolResultObject, { output, pretty, saveIma
   }
   if (parsedResult === undefined) parsedResult = {};
 
+  // Tool-level errors are flattened to a top-level `error` string so agents
+  // can read the failure without descending into result.
+  const errorMessage = isError
+    ? (typeof parsedResult?.error === "string" && parsedResult.error
+        ? parsedResult.error
+        : textContent?.text || "Tool failed.")
+    : undefined;
+
   const images = [];
   if (saveImages) {
     for (let index = 0; index < imageContent.length; index += 1) {
@@ -259,6 +267,7 @@ async function renderResult(mcpTool, toolResultObject, { output, pretty, saveIma
   const body = {
     ok: !isError,
     tool: mcpTool,
+    ...(errorMessage !== undefined ? { error: errorMessage } : {}),
     result: parsedResult,
     ...(images.length ? { images } : {}),
   };
