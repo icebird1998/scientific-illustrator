@@ -20,6 +20,7 @@
 // Exit codes: 0 success, 1 tool/server failure, 2 usage error.
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { promises as fs } from "node:fs";
 import http from "node:http";
@@ -322,7 +323,7 @@ function daemonAlive(port) {
   return daemonHealth(port).then((health) => Boolean(health?.ok));
 }
 
-function httpRpcCall(port, mcpTool, toolArgs, timeoutMs) {
+function httpRpcCall(port, mcpTool, toolArgs, timeoutMs, token = "") {
   const payload = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
@@ -331,7 +332,11 @@ function httpRpcCall(port, mcpTool, toolArgs, timeoutMs) {
   });
   return httpRequest(`http://127.0.0.1:${port}/`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: payload,
   }, timeoutMs);
 }
@@ -340,15 +345,17 @@ async function ensureDaemon({ stateDir, port, env, timeoutMs }) {
   const existing = await daemonHealth(port);
   if (existing?.ok) {
     // A healthy daemon is already running; record its real pid and reuse it.
-    const pid = Number(existing.pid) || (await readDaemon(stateDir))?.pid || null;
+    const state = (await readDaemon(stateDir)) || {};
+    const pid = Number(existing.pid) || state.pid || null;
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(daemonStateFile(stateDir), JSON.stringify({ pid, port, started_at: existing.started_at || new Date().toISOString() }), "utf8").catch(() => {});
-    return { started: false, port };
+    await fs.writeFile(daemonStateFile(stateDir), JSON.stringify({ pid, port, token: state.token || "", started_at: existing.started_at || new Date().toISOString() }), "utf8").catch(() => {});
+    return { started: false, port, token: state.token || "" };
   }
+  const token = randomBytes(24).toString("base64url");
   const child = spawn(process.execPath, [GROUPS.ppt.server], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, ...env, SCI_ILLU_HTTP: `127.0.0.1:${port}` },
+    env: { ...process.env, ...env, SCI_ILLU_HTTP: `127.0.0.1:${port}`, SCI_ILLU_HTTP_TOKEN: token },
   });
   child.unref();
   const deadline = Date.now() + Math.min(15_000, timeoutMs);
@@ -361,8 +368,8 @@ async function ensureDaemon({ stateDir, port, env, timeoutMs }) {
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
   await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(daemonStateFile(stateDir), JSON.stringify({ pid: child.pid, port, started_at: new Date().toISOString() }), "utf8");
-  return { started: true, port };
+  await fs.writeFile(daemonStateFile(stateDir), JSON.stringify({ pid: child.pid, port, token, started_at: new Date().toISOString() }), "utf8");
+  return { started: true, port, token };
 }
 
 async function stopDaemon(stateDir) {
@@ -475,7 +482,9 @@ async function main() {
     fail(`Missing tool name. Run 'sci-illu help ${groupName}'.`, 2);
   }
 
-  const stateDir = values["state-dir"] ? path.resolve(values["state-dir"]) : DEFAULT_STATE_DIR;
+  const stateDir = values["state-dir"]
+    ? path.resolve(values["state-dir"])
+    : (process.env.SCIENTIFIC_ILLUSTRATOR_STATE_DIR && path.resolve(process.env.SCIENTIFIC_ILLUSTRATOR_STATE_DIR)) || DEFAULT_STATE_DIR;
   const timeoutMs = Number(values["timeout-ms"] || DEFAULT_TIMEOUT_MS);
   const env = { SCIENTIFIC_ILLUSTRATOR_STATE_DIR: stateDir };
   if (values.backend) env.SCIENTIFIC_ILLUSTRATOR_PPT_BACKEND = values.backend;
@@ -490,7 +499,7 @@ async function main() {
       process.exit(0);
     }
     const daemon = await ensureDaemon({ stateDir, port, env, timeoutMs });
-    process.stdout.write(`${JSON.stringify({ ok: true, started: daemon.started, port: daemon.port, backend: "officejs", daemon_file: daemonStateFile(stateDir) })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, started: daemon.started, port: daemon.port, backend: "officejs", token_set: Boolean(daemon.token), daemon_file: daemonStateFile(stateDir) })}\n`);
     process.exit(0);
   }
 
@@ -501,8 +510,8 @@ async function main() {
   if (groupName === "ppt" && backend === "officejs") {
     const port = Number(values.port || DEFAULT_PPT_HTTP_PORT);
     try {
-      await ensureDaemon({ stateDir, port, env, timeoutMs });
-      const response = await httpRpcCall(port, mcpTool, toolArgs, timeoutMs);
+      const daemon = await ensureDaemon({ stateDir, port, env, timeoutMs });
+      const response = await httpRpcCall(port, mcpTool, toolArgs, timeoutMs, daemon.token);
       if (response.error) {
         process.stdout.write(`${JSON.stringify({ ok: false, tool: mcpTool, error: response.error.message || JSON.stringify(response.error) })}\n`);
         process.exit(1);

@@ -6,6 +6,7 @@
 // informative skips (e.g., draw.io not installed, python-pptx missing).
 
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -178,16 +179,29 @@ if (pptStatus.code === 0 && pptBody?.ok === true) {
 // --- ppt Office.js daemon lifecycle ------------------------------------------
 
 const daemonPort = String(18_100 + Math.floor(Math.random() * 400));
-const daemonRun = await runCli(["ppt", "serve", "--port", daemonPort]);
+const daemonRun = await runCli(["ppt", "serve", "--port", daemonPort, "--state-dir", STATE_DIR]);
 const daemonBody = parseOut(daemonRun);
 check("ppt serve starts daemon", daemonRun.code === 0 && daemonBody?.ok === true, daemonRun.stdout);
 
 if (daemonRun.code === 0) {
-  const viaDaemon = await runCli(["ppt", "status", "--backend", "officejs", "--port", daemonPort]);
+  const viaDaemon = await runCli(["ppt", "status", "--backend", "officejs", "--port", daemonPort, "--state-dir", STATE_DIR]);
   const viaBody = parseOut(viaDaemon);
   check("officejs call routed through daemon", viaDaemon.code === 0 && viaBody?.ok === true, viaDaemon.stdout.slice(0, 300));
 
-  const stopRun = await runCli(["ppt", "stop", "--port", daemonPort]);
+  // Unauthenticated HTTP calls to the daemon must be rejected.
+  const daemonState = await fs.readFile(path.join(STATE_DIR, "ppt-daemon.json"), "utf8").then(JSON.parse).catch(() => null);
+  if (daemonState?.token) {
+    const raw = http.request(`http://127.0.0.1:${daemonPort}/`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    const statusCode = await new Promise((resolve) => {
+      raw.on("response", (res) => resolve(res.statusCode));
+      raw.on("error", () => resolve(null));
+      raw.write(JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: {} }));
+      raw.end();
+    });
+    check("daemon rejects unauthenticated calls", statusCode === 401, `status=${statusCode}`);
+  }
+
+  const stopRun = await runCli(["ppt", "stop", "--port", daemonPort, "--state-dir", STATE_DIR]);
   const stopBody = parseOut(stopRun);
   check("ppt stop stops daemon", stopRun.code === 0 && stopBody?.ok === true && stopBody?.stopped === true, stopRun.stdout);
 } else {

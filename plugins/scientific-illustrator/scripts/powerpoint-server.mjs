@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFile } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -1312,6 +1313,15 @@ process.on("unhandledRejection", (error) => process.stderr.write(`[${SERVER_NAME
 
 const httpBind = String(process.env.SCI_ILLU_HTTP || "").trim();
 if (httpBind) {
+  const httpToken = String(process.env.SCI_ILLU_HTTP_TOKEN || "");
+  const httpAuthorized = (request) => {
+    if (!httpToken) return true; // token-less mode keeps the old localhost contract
+    const header = String(request.headers.authorization || "");
+    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+    const expected = Buffer.from(httpToken);
+    const actual = Buffer.from(token);
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  };
   const separator = httpBind.lastIndexOf(":");
   const host = separator > 0 ? httpBind.slice(0, separator) : "127.0.0.1";
   const port = Number(httpBind.slice(separator + 1));
@@ -1332,6 +1342,12 @@ if (httpBind) {
     if (request.method !== "POST") {
       const out = JSON.stringify(rpcError(null, -32600, "Method not allowed"));
       response.writeHead(405, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(out) });
+      response.end(out);
+      return;
+    }
+    if (!httpAuthorized(request)) {
+      const out = JSON.stringify(rpcError(null, -32601, "Unauthorized: invalid or missing SCI_ILLU_HTTP_TOKEN."));
+      response.writeHead(401, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(out) });
       response.end(out);
       return;
     }
