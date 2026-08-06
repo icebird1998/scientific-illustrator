@@ -18,7 +18,7 @@
     "editable-figure",
     "mcp"
   ],
-  "skills": "./skills/",
+  "skills": "../../skills/",
   "interface": {
     "displayName": "Scientific Illustrator",
     "shortDescription": "Build editable figures in draw.io, PowerPoint, or WPS.",

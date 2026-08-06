@@ -1,0 +1,22 @@
+{
+  "name": "scientific-illustrator",
+  "version": "1.5.3",
+  "description": "Design or recreate scientific figures in draw.io, Microsoft PowerPoint, or WPS Presentation with editable objects.",
+  "mcpServers": {
+    "drawio-live": {
+      "command": "node",
+      "args": ["${extensionPath}/plugins/scientific-illustrator/scripts/live-server.mjs"],
+      "cwd": "${extensionPath}/plugins/scientific-illustrator"
+    },
+    "drawio-file-utils": {
+      "command": "node",
+      "args": ["${extensionPath}/plugins/scientific-illustrator/scripts/server.mjs"],
+      "cwd": "${extensionPath}/plugins/scientific-illustrator"
+    },
+    "powerpoint-live": {
+      "command": "node",
+      "args": ["${extensionPath}/plugins/scientific-illustrator/scripts/powerpoint-server.mjs"],
+      "cwd": "${extensionPath}/plugins/scientific-illustrator"
+    }
+  }
+}

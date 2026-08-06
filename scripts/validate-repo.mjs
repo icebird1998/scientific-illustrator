@@ -194,6 +194,7 @@ for (const fragment of ["preserve_aspect_ratio", "$presentation.PageSetup.SlideW
 }
 if (!comBridge.includes("Shape target is ambiguous because semantic name")) throw new Error("Windows COM duplicate-name target safeguard is missing.");
 
+const skillsDir = path.join(root, "skills");
 const requiredSkills = [
   "audit-scientific-figure",
   "correct-scientific-figure",
@@ -203,16 +204,25 @@ const requiredSkills = [
   "recreate-scientific-figure-in-drawio",
 ];
 for (const skill of requiredSkills) {
-  await fs.access(path.join(pluginRoot, "skills", skill, "SKILL.md"));
-  await fs.access(path.join(pluginRoot, "skills", skill, "agents", "openai.yaml"));
+  await fs.access(path.join(skillsDir, skill, "SKILL.md"));
+  await fs.access(path.join(skillsDir, skill, "agents", "openai.yaml"));
 }
 
 async function collectFiles(directory) {
   const files = [];
   for (const item of await fs.readdir(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, item.name);
-    if (item.isDirectory()) files.push(...await collectFiles(fullPath));
-    else files.push(fullPath);
+    if (item.isDirectory()) {
+      if (item.name === "node_modules" || item.name === "__pycache__" || item.name === ".venv") {
+        continue;
+      }
+      files.push(...await collectFiles(fullPath));
+    } else {
+      if (item.name.endsWith(".pyc")) {
+        continue;
+      }
+      files.push(fullPath);
+    }
   }
   return files;
 }
