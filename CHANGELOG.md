@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added Claude Code support alongside Codex: the repository now carries `.claude-plugin/marketplace.json` and a `.claude-plugin/plugin.json` manifest, so the same plugin installs from either client without changing the Codex integration.
+- Declared the three MCP servers for Claude Code through `${CLAUDE_PLUGIN_ROOT}` because Claude Code runs plugins from its cache copy instead of the marketplace checkout.
+- Added `install-claude.sh` and `install-claude.ps1`, which build the OOXML Python environment with `venv --copies`; Claude Code's cache copy drops symlinked interpreters, so a symlinked venv would break python-pptx discovery.
+- Added Claude Code installation and prompt documentation plus repository validation that keeps both manifest sets synchronized; the portability scan now skips `.venv` and `__pycache__` because the installers build the Python environment inside the plugin tree.
+- Mentioned both installers in the OOXML python-pptx error and made session guidance host-neutral ("a new Codex or Claude Code task") so Claude Code users are not directed to Codex-only steps.
+
 ## 1.5.3 — 2026-08-01
 
 - Fixed macOS WPS discovery for the localized application path, environment overrides, Bundle ID lookup, and exact main-process matching.

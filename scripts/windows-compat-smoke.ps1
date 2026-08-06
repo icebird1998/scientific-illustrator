@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path $PSScriptRoot -Parent
 $FilesToParse = @(
     (Join-Path $RepositoryRoot "install.ps1"),
+    (Join-Path $RepositoryRoot "install-claude.ps1"),
     (Join-Path $RepositoryRoot "plugins\scientific-illustrator\scripts\powerpoint-bridge.ps1")
 )
 

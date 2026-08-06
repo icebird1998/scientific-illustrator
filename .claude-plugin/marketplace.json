@@ -1,0 +1,15 @@
+{
+  "name": "scientific-illustrator-tools",
+  "description": "Scientific Illustrator tools for rebuilding reference figures as editable draw.io, PowerPoint, or WPS illustrations.",
+  "owner": {
+    "name": "科研up主:进击的土博",
+    "url": "https://github.com/icebird1998"
+  },
+  "plugins": [
+    {
+      "name": "scientific-illustrator",
+      "source": "./plugins/scientific-illustrator",
+      "description": "Build editable figures in draw.io, PowerPoint, or WPS."
+    }
+  ]
+}

@@ -75,7 +75,7 @@ function nextSteps() {
     return [
       `Review and trust this local certificate in macOS Keychain Access: ${paths.certificate_path}`,
       "Restart Microsoft PowerPoint after trusting the certificate and sideloading the manifest.",
-      "In a new Codex task, select Scientific Illustrator and call powerpoint_officejs_status once to start the local bridge.",
+      "In a new Codex or Claude Code task, select Scientific Illustrator and call powerpoint_officejs_status once to start the local bridge.",
       "Then in PowerPoint, open Insert > My Add-ins > Scientific Illustrator Live and keep the task pane open.",
       "Call powerpoint_officejs_status again; connected must be true before drawing.",
     ];
@@ -83,7 +83,7 @@ function nextSteps() {
   return [
     `Trust the localhost certificate for the current user after reviewing it: ${paths.certificate_path}`,
     "Sideload officejs/manifest.xml with the Microsoft Office add-in development procedure for this platform.",
-    "Call powerpoint_officejs_status in a new Codex task to start the bridge, then open Scientific Illustrator Live in PowerPoint and check status again.",
+    "Call powerpoint_officejs_status in a new Codex or Claude Code task to start the bridge, then open Scientific Illustrator Live in PowerPoint and check status again.",
   ];
 }
 
