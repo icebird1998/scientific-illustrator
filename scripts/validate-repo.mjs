@@ -56,6 +56,49 @@ for (const server of requiredServers) {
     await fs.access(path.resolve(pluginRoot, argument));
   }
 }
+
+const claudeMarketplacePath = path.join(root, ".claude-plugin", "marketplace.json");
+const claudeMarketplace = JSON.parse(await fs.readFile(claudeMarketplacePath, "utf8"));
+if (claudeMarketplace.name !== marketplace.name) throw new Error("Codex and Claude Code marketplace names differ.");
+if (claudeMarketplace.owner?.name !== manifest.author.name) {
+  throw new Error("Claude Code marketplace attribution is missing.");
+}
+if (!Array.isArray(claudeMarketplace.plugins) || claudeMarketplace.plugins.length !== 1) {
+  throw new Error("Claude Code marketplace must expose exactly one plugin.");
+}
+const claudeEntry = claudeMarketplace.plugins[0];
+if (claudeEntry.name !== manifest.name || claudeEntry.source !== entry.source.path) {
+  throw new Error("Claude Code marketplace entry does not match the plugin location.");
+}
+const claudeManifest = JSON.parse(await fs.readFile(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8"));
+if (claudeManifest.name !== manifest.name || claudeManifest.version !== manifest.version) {
+  throw new Error("Codex and Claude Code plugin manifests differ in name or version.");
+}
+if (claudeManifest.description !== manifest.description) {
+  throw new Error("Codex and Claude Code plugin descriptions differ.");
+}
+if (claudeManifest.author?.name !== manifest.author.name) throw new Error("Claude Code manifest attribution is missing.");
+for (const server of requiredServers) {
+  const definition = claudeManifest.mcpServers?.[server];
+  if (!definition || definition.command !== "node" || !Array.isArray(definition.args)) {
+    throw new Error(`Claude Code MCP server is missing or invalid: ${server}`);
+  }
+  for (const argument of definition.args) {
+    if (!argument.startsWith("${CLAUDE_PLUGIN_ROOT}/")) {
+      throw new Error(`Claude Code MCP server ${server} must resolve scripts through \${CLAUDE_PLUGIN_ROOT}; the plugin runs from Claude Code's cache copy.`);
+    }
+    await fs.access(path.join(pluginRoot, argument.slice("${CLAUDE_PLUGIN_ROOT}/".length)));
+  }
+}
+for (const installer of ["install-claude.sh", "install-claude.ps1"]) {
+  const source = await fs.readFile(path.join(root, installer), "utf8");
+  if (!source.includes("-m venv --copies")) {
+    throw new Error(`${installer} must build the venv with --copies; Claude Code's plugin cache copy drops symlinked interpreters.`);
+  }
+  if (!source.includes("claude plugin marketplace add") || !source.includes("claude plugin install")) {
+    throw new Error(`${installer} does not register and install the Claude Code plugin.`);
+  }
+}
 for (const serverFile of ["live-server.mjs", "server.mjs", "powerpoint-server.mjs", "officejs-bridge.mjs"]) {
   const source = await fs.readFile(path.join(pluginRoot, "scripts", serverFile), "utf8");
   if (!source.includes(`const SERVER_VERSION = "${manifest.version}";`)) {
@@ -210,6 +253,7 @@ for (const skill of requiredSkills) {
 async function collectFiles(directory) {
   const files = [];
   for (const item of await fs.readdir(directory, { withFileTypes: true })) {
+    if (item.name === ".venv" || item.name === "__pycache__") continue;
     const fullPath = path.join(directory, item.name);
     if (item.isDirectory()) files.push(...await collectFiles(fullPath));
     else files.push(fullPath);

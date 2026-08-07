@@ -1,6 +1,8 @@
 # Scientific Illustrator
 
-把参考图上传给 Codex，插件会在 **Microsoft PowerPoint、WPS 演示或 draw.io** 中尽量用可编辑对象重新绘制，并自动检查和修正。
+把参考图上传给 Codex 或 Claude Code，插件会在 **Microsoft PowerPoint、WPS 演示或 draw.io** 中尽量用可编辑对象重新绘制，并自动检查和修正。
+
+下文以 Codex 为例；Claude Code 用户请看 [在 Claude Code 中使用](#在-claude-code-中使用)。
 
 **作者：科研 up 主「进击的土博」**
 
@@ -95,6 +97,80 @@ scientific-illustrator@scientific-illustrator-tools。完成后提醒我重启 C
 如果第一行插件命令没有被识别，请在 Codex 输入框的插件菜单中选择 **Scientific Illustrator**，再发送后面的提示词。
 
 如果想让 PowerPoint 或 WPS 一直显示在最前面观看绘制过程，在提示词最后加一句：
+
+~~~text
+绘制期间请将 focus_policy 设置为 foreground，让演示文稿保持在前台。
+~~~
+
+## 在 Claude Code 中使用
+
+同一个仓库同时提供 Codex 与 Claude Code 两套插件清单，安装互不影响。
+
+### 安装
+
+macOS / Linux：
+
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/icebird1998/scientific-illustrator/main/install-claude.sh | bash
+~~~
+
+Windows：
+
+~~~powershell
+$p="$env:TEMP\scientific-illustrator-install-claude.ps1"; Invoke-WebRequest https://raw.githubusercontent.com/icebird1998/scientific-illustrator/main/install-claude.ps1 -OutFile $p; powershell -ExecutionPolicy Bypass -File $p
+~~~
+
+手动安装：
+
+~~~bash
+git clone https://github.com/icebird1998/scientific-illustrator.git
+cd scientific-illustrator
+claude plugin marketplace add "$(pwd)"
+claude plugin install scientific-illustrator@scientific-illustrator-tools
+~~~
+
+安装或更新后，重启 Claude Code 并新建会话。macOS 安装脚本会为 WPS/Mac PowerPoint 的 OOXML 后端准备自带 python-pptx 的独立 Python 环境；Mac PowerPoint 实时加载项的启用步骤与下文相同，在克隆目录（默认 `~/.claude/marketplaces/scientific-illustrator`）中运行即可。更新版本时重新运行安装脚本。
+
+### 提示词
+
+Claude Code 不需要 Codex 提示词中的第一行插件引用。打开对应软件并上传参考图后，整段复制发送即可，技能会自动触发。
+
+使用 Microsoft PowerPoint：
+
+~~~text
+使用 Scientific Illustrator，在当前 Microsoft PowerPoint 中复刻我上传的参考图。
+先连接 PowerPoint，检查状态、可用能力、backend 和当前幻灯片；如果没有演示文稿就新建。
+只有 COM 或 officejs-context-sync 才能声称连接当前窗口；如果使用 OOXML，明确说明正在编辑工作副本。
+默认在后台绘制，不要反复抢占窗口。优先使用可编辑的文字、形状、连接线、表格和图表。
+只有无法可靠绘制的最小区域，例如显微照片或复杂纹理，才裁剪为图片插入。
+按区域逐步绘制，每完成一个区域就检查结构和预览图，有问题先修正再继续。
+完成后做全图对比检查，保存 PPTX 并导出最终预览图。
+~~~
+
+使用 WPS 演示：
+
+~~~text
+使用 Scientific Illustrator，在 WPS 演示中复刻我上传的参考图。
+请将 host_application 明确设为 wps，不要连接 Microsoft PowerPoint；先检查状态和可用能力，
+确认 target_application=wps 且 microsoft_powerpoint_used=false。如果没有指定要编辑的 PPTX 路径，
+就新建一个 WPS 可编辑工作副本，不要声称已连接任意未保存的当前窗口。默认在后台按检查点绘制。
+优先使用可编辑的文字、形状、连接线、表格和图表。只有无法可靠绘制的最小区域，
+例如显微照片或复杂纹理，才裁剪为图片插入。按区域逐步绘制；每个区域完成后调用刷新，
+分别检查 open_dispatched、document_open_verified 和 refresh_verified，有问题先修正。
+完成后做全图对比检查，保存 PPTX 并导出最终预览图。
+~~~
+
+使用 draw.io：
+
+~~~text
+使用 Scientific Illustrator，连接实时 draw.io 画布并复刻我上传的参考图。
+优先使用可编辑的文字、图形、连接线、表格、图表和分组对象。
+只有无法可靠绘制的最小区域，例如显微照片或复杂纹理，才裁剪为图片插入。
+按区域逐步绘制，每完成一个区域就检查结构和画布截图，有问题先修正再继续。
+完成后做全图对比检查，保存可编辑 .drawio，并导出宽度为 2000 px 的 PNG 预览图。
+~~~
+
+想观看绘制过程时，同样在提示词最后加一句：
 
 ~~~text
 绘制期间请将 focus_policy 设置为 foreground，让演示文稿保持在前台。

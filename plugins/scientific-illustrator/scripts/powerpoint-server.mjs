@@ -761,7 +761,7 @@ async function ooxmlPythonExecutable() {
       failures.push(`${candidate.executable}${candidate.args.length ? ` ${candidate.args.join(" ")}` : ""}: ${String(error.message || error).split("\n")[0]}`);
     }
   }
-  throw new Error(`The PowerPoint/WPS OOXML backend requires Python with python-pptx. Run install.sh on macOS/Linux or set SCIENTIFIC_ILLUSTRATOR_PYTHON. Checked: ${failures.join("; ")}`);
+  throw new Error(`The PowerPoint/WPS OOXML backend requires Python with python-pptx. Run install.sh (Codex) or install-claude.sh (Claude Code) on macOS/Linux, or set SCIENTIFIC_ILLUSTRATOR_PYTHON. Checked: ${failures.join("; ")}`);
 }
 
 async function runOoxmlBridge(action, args = {}) {
@@ -906,10 +906,10 @@ async function resolveBackend(action, args = {}) {
   const host = requestedHost(args);
   if (lockedBackend) {
     if (host !== "auto" && lockedHost && host !== lockedHost) {
-      throw new Error(`This presentation session is locked to ${lockedHost} through ${lockedBackend}, but ${host} was requested. Start a new Codex task before switching target applications.`);
+      throw new Error(`This presentation session is locked to ${lockedHost} through ${lockedBackend}, but ${host} was requested. Start a new Codex or Claude Code task before switching target applications.`);
     }
     if (host === "wps" && lockedBackend !== "ooxml") {
-      throw new Error(`This presentation session is locked to ${lockedBackend}, which cannot control WPS Presentation. Start a new Codex task and select host_application=wps before editing.`);
+      throw new Error(`This presentation session is locked to ${lockedBackend}, which cannot control WPS Presentation. Start a new Codex or Claude Code task and select host_application=wps before editing.`);
     }
     if (args.host_application !== undefined) hostPreference = host;
     return lockedBackend;
@@ -975,7 +975,7 @@ async function runBridge(action, args = {}, forcedBackend = null) {
         ? "powerpoint"
         : requested === "auto" ? null : requested;
     if (lockedHost && selectedHost && lockedHost !== selectedHost) {
-      throw new Error(`Backend response targeted ${selectedHost}, but this session is locked to ${lockedHost}. Start a new Codex task; no further edits will be dispatched.`);
+      throw new Error(`Backend response targeted ${selectedHost}, but this session is locked to ${lockedHost}. Start a new Codex or Claude Code task; no further edits will be dispatched.`);
     }
     lockedHost = lockedHost || selectedHost;
   }
@@ -1122,7 +1122,7 @@ async function handleTool(name, args = {}) {
     const requested = String(args.backend || "auto").toLowerCase();
     if (!VALID_BACKENDS.has(requested)) throw new Error(`Unknown backend: ${requested}`);
     if (lockedBackend && requested !== lockedBackend && requested !== backendPreference) {
-      throw new Error(`This presentation session is already locked to ${lockedBackend}. Start a new Codex task before switching backends so live and file-backed objects are never mixed.`);
+      throw new Error(`This presentation session is already locked to ${lockedBackend}. Start a new Codex or Claude Code task before switching backends so live and file-backed objects are never mixed.`);
     }
     if (requested === "officejs") {
       const status = await officeJsStatus(Number(args.wait_for_connection_ms || 0));
