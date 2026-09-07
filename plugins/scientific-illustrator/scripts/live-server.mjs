@@ -485,6 +485,29 @@ const tools = [
     },
   },
   {
+    name: "drawio_live_reload_from_disk",
+    description:
+      "After an agent rewrites the already-open .drawio file on disk, wait for draw.io Desktop's red file-changed banner and trigger its synchronize handler so the visible viewport reloads without restarting the app. Uses the in-page menubar status click listener (no OS mouse). data-action=statusFunction is only a marker; this does not call a public window.statusFunction API. Prefer this over close/relaunch for ordinary disk→viewport refresh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        wait_ms: {
+          type: "integer",
+          minimum: 0,
+          maximum: 60000,
+          default: 5000,
+          description: "How long to wait for the red geStatusAlert banner after the disk write.",
+        },
+        include_screenshot: {
+          type: "boolean",
+          default: false,
+          description: "When true, return a viewport screenshot after a successful reload.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "drawio_live_close_session",
     description: "Close only the draw.io process launched by this MCP server. Refuses to close an externally connected user session and requires confirm=true.",
     inputSchema: {
@@ -2003,6 +2026,120 @@ async function launchLive(args) {
   return { connected: true, port: live.port, drawio: DRAWIO, spawned_process_id: live.process?.pid || null, target: { id: target.id, title: target.title, url: target.url }, step_delay_ms: live.stepDelayMs, status: await liveStatus() };
 }
 
+async function bannerState() {
+  return evaluate(`(() => {
+    const alert = document.querySelector('.geStatusAlert[data-action="statusFunction"]')
+      || document.querySelector('.geStatusAlert');
+    const a = document.querySelector('a.geStatus');
+    const text = ((alert && (alert.innerText || alert.title)) || (a && a.innerText) || '')
+      .trim().replace(/\\s+/g, ' ').slice(0, 120);
+    return {
+      banner: !!alert,
+      data_action: alert ? alert.getAttribute('data-action') : null,
+      text: text || null,
+    };
+  })()`);
+}
+
+async function waitForFileChangedBanner(waitMs = 5000) {
+  const deadline = Date.now() + Math.max(0, waitMs);
+  let last = await bannerState();
+  while (!last.banner && Date.now() < deadline) {
+    await sleep(200);
+    last = await bannerState();
+  }
+  return last;
+}
+
+async function triggerFileChangedSync() {
+  // Preferred: menubar a.geStatus mxListener click (no OS mouse).
+  const viaListener = await evaluate(`(() => {
+    const alert = document.querySelector('.geStatusAlert[data-action="statusFunction"]')
+      || document.querySelector('.geStatusAlert');
+    const a = document.querySelector('a.geStatus');
+    if (!alert && !a) return { ok: false, method: null, reason: 'no-banner' };
+    const text = ((alert && (alert.innerText || alert.title)) || (a && a.innerText) || '')
+      .trim().replace(/\\s+/g, ' ');
+    if (text && !/измен|синхрон|changed|synchron/i.test(text)) {
+      return { ok: false, method: null, reason: 'banner-text-mismatch', text: text.slice(0, 80) };
+    }
+    if (!a || !a.mxListenerList || !a.mxListenerList.length) {
+      return { ok: false, method: null, reason: 'no-mxListener', text: text.slice(0, 80) };
+    }
+    try {
+      const listener = a.mxListenerList.find((item) => item.name === 'click') || a.mxListenerList[0];
+      listener.f.call(a, {
+        type: listener.name || 'click',
+        target: alert || a,
+        currentTarget: a,
+        bubbles: true,
+      });
+      return { ok: true, method: 'mxListener', evt: listener.name || 'click', text: text.slice(0, 100) };
+    } catch (error) {
+      return { ok: false, method: 'mxListener', reason: String(error), text: text.slice(0, 80) };
+    }
+  })()`);
+  if (viaListener?.ok) return viaListener;
+
+  // Fallback: synthetic DOM mouse events on the red plate (still no OS cursor).
+  return evaluate(`(() => {
+    const alert = document.querySelector('.geStatusAlert[data-action="statusFunction"]')
+      || document.querySelector('.geStatusAlert');
+    if (!alert) return { ok: false, method: null, reason: 'no-banner' };
+    const text = (alert.innerText || alert.title || '').trim().replace(/\\s+/g, ' ');
+    if (text && !/измен|синхрон|changed|synchron/i.test(text)) {
+      return { ok: false, method: null, reason: 'banner-text-mismatch', text: text.slice(0, 80) };
+    }
+    const rect = alert.getBoundingClientRect();
+    const x = rect.left + Math.min(120, Math.max(24, rect.width * 0.35));
+    const y = rect.top + rect.height / 2;
+    const el = document.elementFromPoint(x, y) || alert;
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+      el.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        button: 0,
+      }));
+    }
+    return {
+      ok: true,
+      method: 'syntheticMouse',
+      text: text.slice(0, 100),
+      x,
+      y,
+      hit: String(el.className || ''),
+    };
+  })()`);
+}
+
+async function reloadFromDisk(args = {}) {
+  const waitMs = args.wait_ms ?? 5000;
+  const before = await waitForFileChangedBanner(waitMs);
+  if (!before.banner) {
+    return {
+      ok: false,
+      reason: "no-banner-within-wait",
+      before,
+      note: "Write the open .drawio on disk first; increase wait_ms if the Desktop watcher is slow. Prefer this tool over close/relaunch.",
+    };
+  }
+  const attempt = await triggerFileChangedSync();
+  await sleep(700);
+  const after = await bannerState();
+  const ok = Boolean(attempt?.ok) && !after.banner;
+  return {
+    ok,
+    method: attempt?.ok ? attempt.method : null,
+    reason: ok ? null : (attempt?.ok ? "banner-still-present-after-sync" : (attempt?.reason || "sync-failed")),
+    before,
+    attempt,
+    after,
+  };
+}
+
 async function handleTool(name, args = {}) {
   switch (name) {
     case "drawio_live_launch": {
@@ -2156,6 +2293,14 @@ async function handleTool(name, args = {}) {
       await fs.mkdir(path.dirname(output), { recursive: true });
       await fs.writeFile(output, xml, "utf8");
       return { value: { output_path: output, bytes: Buffer.byteLength(xml), saved_from_visible_session: true } };
+    }
+    case "drawio_live_reload_from_disk": {
+      const value = await reloadFromDisk(args);
+      if (!value.ok) return { value };
+      return {
+        value,
+        imageData: args.include_screenshot ? await captureScreenshot() : undefined,
+      };
     }
     case "drawio_live_close_session": {
       if (args.confirm !== true) throw new Error("confirm=true is required to close a draw.io session.");

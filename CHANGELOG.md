@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (fork thezavtrak-a11y)
+
+- Added `drawio_live_reload_from_disk`: after rewriting the already-open `.drawio` on disk, wait for Desktop's red file-changed banner and trigger synchronize via the in-page `a.geStatus` click listener (synthetic mouse fallback). No OS mouse, no app restart. Prefer over `close_session`/`launch` for ordinary disk→viewport refresh.
+
 ## 1.5.4 — 2026-08-08
 
 - Updated the author, developer, Office add-in provider, task-pane, license, README, and successful-delivery attribution to `一个地质博士`.
