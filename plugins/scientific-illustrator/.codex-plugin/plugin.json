@@ -1,7 +1,7 @@
 {
   "name": "scientific-illustrator",
-  "version": "1.5.4",
-  "description": "Design or recreate scientific figures in draw.io, Microsoft PowerPoint, or WPS Presentation with editable objects, background-safe drawing, live Office.js support, and one Designer-Drawer-Reviewer-Corrector workflow.",
+  "version": "1.6.0",
+  "description": "Design or recreate editable scientific figures in draw.io, PowerPoint, or WPS with bounded batch drawing, adaptive module routing, and model feedback at quality checkpoints.",
   "author": {
     "name": "一个地质博士",
     "url": "https://github.com/icebird1998"
@@ -32,8 +32,8 @@
     "websiteURL": "https://github.com/icebird1998/scientific-illustrator",
     "privacyPolicyURL": "https://github.com/icebird1998/scientific-illustrator/blob/main/PRIVACY.md",
     "defaultPrompt": [
-      "在 PowerPoint 或 WPS 中分面板复刻这张参考图，优先使用原生可编辑对象，并反复检查修正后保存。",
-      "在 draw.io 中逐步复刻这张参考图，保持文字、图形、表格、图表和连接线可编辑。",
+      "在 PowerPoint 或 WPS 中批量复刻参考图，零人工等待，保持原生可编辑，在逻辑检查点核对结构和渲染后定点修正。",
+      "在 draw.io 中批量复刻参考图，保持文字、图形、表格、图表和连线可编辑，仅对复杂模块动态判断绘制或局部裁剪。",
       "根据研究内容选择 draw.io 或 PowerPoint，设计一张布局整齐、箭头清晰的可编辑科学插图。"
     ],
     "brandColor": "#F08705"

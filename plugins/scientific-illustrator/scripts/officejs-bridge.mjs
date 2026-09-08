@@ -17,7 +17,7 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 45_000;
 const DEFAULT_CLIENT_TTL_MS = 35_000;
 const DEFAULT_LONG_POLL_MS = 20_000;
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
-const SERVER_VERSION = "1.5.4";
+const SERVER_VERSION = "1.6.0";
 
 const CONTENT_TYPES = {
   ".css": "text/css; charset=utf-8",

@@ -5,7 +5,7 @@ description: Convert Reviewer findings for a scientific illustration into minima
 
 # Correct Scientific Figure
 
-Act as the Corrector. Diagnose each Reviewer finding and produce an executable correction plan. Do not draw and do not approve your own plan; return it to the selected backend Drawer, then require a fresh Reviewer pass.
+Diagnose observed findings and produce a minimal executable correction plan. Planning, execution, and visual review are separate phases that one model may perform; a plan is not evidence that its correction worked. Use [Adaptive reconstruction workflow](../recreate-scientific-figure/references/adaptive-workflow.md) for feedback, representation changes, and bounded retries.
 
 ## Required inputs
 
@@ -18,7 +18,7 @@ Use:
 - design or reconstruction specification;
 - raster declarations and grouping/z-order.
 
-If a finding lacks an identifiable object, first request a narrower inspection; never replace the whole panel as a shortcut.
+If a finding lacks an identifiable object, obtain a narrower inspection; never replace the whole panel as a shortcut. Reuse current evidence and accepted geometry instead of collecting the entire document again.
 
 ## Diagnose before prescribing
 
@@ -33,6 +33,8 @@ Classify the root cause as one or more of:
 - palette, hierarchy, or reference-correspondence mismatch.
 
 Prefer the smallest change set that fixes the root cause and preserves already approved objects.
+
+Resolve scientific text/data/topology and crop contamination before cosmetic issues. Batch independent small corrections into one sequence with zero artificial delay. Do not send the same vague finding through several role handoffs. When two attempts fail to improve a module, reassess the source or representation rather than repeat the same operation; retain the total per-module attempt count across route changes.
 
 ## Emit an object-level plan
 
@@ -52,6 +54,8 @@ rollback_signal: evidence that the correction harmed an approved area
 ```
 
 Order operations by dependency: decomposition and object creation, geometry, text fit, connectors, grouping, z-order, then exact alignment/distribution.
+
+Include incident connectors when moving nodes, and recheck their endpoints after final alignment/distribution. Use the backend planner's feedback fields only when deciding to repair, reroute, inspect, or stop; ordinary measurable geometry fixes can proceed directly.
 
 ## Equivalent backend operations
 
@@ -86,12 +90,18 @@ Correct text exactly, then set explicit box bounds, margins, wrapping, alignment
 
 Reject a broad crop. Split every independent microscopy field, mask, heatmap, photograph, channel, or prediction into a separate atomic image. Recreate titles, method names, borders, grids, legends, arrows, axes, and annotations as editable objects. Require all five raster declarations on each retained image.
 
+Do not set `contains_reconstructable_content=false` until inspection confirms it. If baked-in overlays cannot be removed faithfully from measured evidence, request a better source or report the limitation. Cropping alone is not background removal.
+
+### Native reconstruction loses intricate appearance
+
+Inspect whether the missing detail is scientifically meaningful or non-semantic appearance. Preserve editable semantic boundaries, data, labels, and connections. For an intricate irreducible field with a valid source and no conflicting editability requirement, plan an atomic crop or a hybrid field with editable overlays. Check crop quality and final-size fidelity before replacing the named native detail. A failed native attempt never authorizes flattening an entire panel.
+
 ### Global correction would damage passed regions
 
 Constrain the operation to named objects or one region. If a shared style token is wrong, list every affected object explicitly and preserve already validated geometry.
 
 ## Regression handoff
 
-Return the plan to `$edit-powerpoint-live` or `$recreate-scientific-figure-in-drawio`. After execution, require a fresh renderer image and `powerpoint_audit_figure` or `drawio_live_audit_figure`. Send that evidence to `$audit-scientific-figure`.
+Execute through `$edit-powerpoint-live` or `$recreate-scientific-figure-in-drawio`. After the correction batch, obtain a fresh renderer image and relevant `powerpoint_audit_figure` or `drawio_live_audit_figure` evidence. Review changed objects and affected neighbors using `$audit-scientific-figure`; reserve repeated whole-figure checks for broad changes and final acceptance.
 
-Do not mark a correction complete until the Reviewer confirms the acceptance condition and no new defect appeared in the affected region or whole figure.
+Mark a correction complete only when current evidence satisfies its acceptance condition without a regression. At the retry budget, retain the latest editable checkpoint and report the specific unresolved finding; never claim a pass because attempts are exhausted.

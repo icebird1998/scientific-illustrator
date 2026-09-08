@@ -8,10 +8,11 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { getOfficeJsBridge } from "./officejs-bridge.mjs";
+import { planReconstruction, reconstructionPlanTool } from "./adaptive-planner.mjs";
 
 const execFileAsync = promisify(execFile);
 const SERVER_NAME = "powerpoint-live";
-const SERVER_VERSION = "1.5.4";
+const SERVER_VERSION = "1.6.0";
 const SUPPORTED_PROTOCOLS = new Set(["2024-11-05", "2025-03-26", "2025-06-18"]);
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE_PATH = path.join(SCRIPT_DIR, "powerpoint-bridge.ps1");
@@ -80,6 +81,7 @@ const shapeTargetProperties = {
 };
 
 const tools = [
+  reconstructionPlanTool("powerpoint_plan_reconstruction"),
   {
     name: "powerpoint_status",
     description: "Check Microsoft PowerPoint or WPS Presentation availability and the current managed presentation. Windows PowerPoint prefers COM; Mac PowerPoint prefers a connected Office.js task pane with per-object context.sync; WPS and unconnected Mac PowerPoint use the editable OOXML fallback. This is read-only.",
@@ -619,7 +621,7 @@ const tools = [
   },
   {
     name: "powerpoint_draw_sequence",
-    description: "Apply a paced sequence of native slide, text, shape, line, connector, table, chart, image, grouping, layering, and update operations. Office.js acknowledges every context.sync; file-backed PowerPoint/WPS saves every operation but refreshes the application only at checkpoints by default.",
+    description: "Apply a sequence of editable objects with zero artificial delay by default. File-backed PowerPoint/WPS loads and saves once per bounded batch and refreshes at checkpoints; failed operations preserve the committed prefix and report the exact index. Office.js acknowledges every context.sync.",
     inputSchema: {
       type: "object",
       required: ["operations"],
@@ -636,9 +638,10 @@ const tools = [
             additionalProperties: true,
           },
         },
-        step_delay_ms: { type: "integer", minimum: 0, maximum: 10000, default: 350 },
+        step_delay_ms: { type: "integer", minimum: 0, maximum: 10000, default: 0 },
         pacing_mode: { type: "string", enum: ["per_object", "checkpoint", "fast"], default: "checkpoint", description: "Office.js always awaits every context.sync. For file-backed WPS/PowerPoint, per_object refreshes after every object, checkpoint refreshes at checkpoint_size boundaries, and fast refreshes once at the end." },
         checkpoint_size: { type: "integer", minimum: 1, maximum: 100, default: 10 },
+        batch_size: { type: "integer", minimum: 1, maximum: 100, default: 25, description: "Maximum OOXML object operations per process and file save. Checkpoints, explicit waits, and activation split batches earlier. Native object detail is preserved." },
       },
       additionalProperties: false,
     },
@@ -766,18 +769,28 @@ async function ooxmlPythonExecutable() {
 
 async function runOoxmlBridge(action, args = {}) {
   if (!existsSync(OOXML_BRIDGE_PATH)) throw new Error(`OOXML presentation bridge is missing: ${OOXML_BRIDGE_PATH}`);
-  const payload = Buffer.from(JSON.stringify({ action, arguments: args }), "utf8").toString("base64");
+  const payload = JSON.stringify({ action, arguments: args });
   const launcher = await ooxmlPythonExecutable();
   try {
-    const { stdout } = await execFileAsync(launcher.executable, [...launcher.args, OOXML_BRIDGE_PATH, payload], {
-      encoding: "utf8",
-      maxBuffer: MAX_BUFFER,
-      env: {
-        ...process.env,
-        SCIENTIFIC_ILLUSTRATOR_STATE_DIR: OOXML_STATE_DIR,
-        SCIENTIFIC_ILLUSTRATOR_FOCUS_POLICY: String(args.focus_policy || focusPolicy),
-        SCIENTIFIC_ILLUSTRATOR_DEFER_REFRESH: args.defer_refresh === true ? "1" : "0",
-      },
+    // stdin avoids the Windows command-line size limit for object batches.
+    const { stdout } = await new Promise((resolve, reject) => {
+      const child = execFile(launcher.executable, [...launcher.args, OOXML_BRIDGE_PATH, "-"], {
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: MAX_BUFFER,
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: "utf-8",
+          SCIENTIFIC_ILLUSTRATOR_STATE_DIR: OOXML_STATE_DIR,
+          SCIENTIFIC_ILLUSTRATOR_FOCUS_POLICY: String(args.focus_policy || focusPolicy),
+          SCIENTIFIC_ILLUSTRATOR_DEFER_REFRESH: args.defer_refresh === true ? "1" : "0",
+        },
+      }, (error, stdout, stderr) => {
+        if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); }
+        else resolve({ stdout });
+      });
+      child.stdin.on("error", (error) => { if (error.code !== "EPIPE") reject(error); });
+      child.stdin.end(payload);
     });
     const text = stdout.trim();
     if (!text) throw new Error("PowerPoint/WPS OOXML bridge returned no JSON.");
@@ -805,7 +818,7 @@ async function windowsPowerPointAvailable() {
 const MUTATING_ACTIONS = new Set([
   "add_slide", "add_textbox", "add_shape", "add_image", "add_line", "add_connector", "add_table",
   "update_table_cell", "update_table_layout", "add_chart", "duplicate_shape", "group_shapes", "ungroup_shape",
-  "set_z_order", "align_shapes", "distribute_shapes", "update_shape", "delete_shape", "activate_slide",
+  "set_z_order", "align_shapes", "distribute_shapes", "update_shape", "delete_shape", "activate_slide", "draw_batch",
 ]);
 const BACKEND_LOCKING_ACTIONS = new Set([...MUTATING_ACTIONS, "launch", "new_presentation", "save", "close_presentation", "quit_application"]);
 
@@ -979,7 +992,7 @@ async function runBridge(action, args = {}, forcedBackend = null) {
     }
     lockedHost = lockedHost || selectedHost;
   }
-  if (MUTATING_ACTIONS.has(action)) mutationCount += 1;
+  if (MUTATING_ACTIONS.has(action)) mutationCount += action === "draw_batch" ? Number(value?.operations_applied || 0) : 1;
   if (value && typeof value === "object") {
     value.focus_policy = focusPolicy;
     value.backend_selection = {
@@ -1022,15 +1035,44 @@ async function runSequence(args) {
     update_shape: "update_shape",
     activate_slide: "activate_slide",
   };
-  const requestedDelay = args.step_delay_ms ?? 350;
+  if (!Array.isArray(args.operations) || args.operations.length < 1 || args.operations.length > 500) {
+    throw new Error("powerpoint_draw_sequence requires 1..500 operations.");
+  }
+  const requestedDelay = args.step_delay_ms ?? 0;
   const pacingMode = args.pacing_mode || "checkpoint";
-  const checkpointSize = args.checkpoint_size || 10;
+  const checkpointSize = args.checkpoint_size ?? 10;
+  const batchSize = args.batch_size ?? 25;
+  for (const [key, value, min, max] of [["step_delay_ms", requestedDelay, 0, 10000], ["checkpoint_size", checkpointSize, 1, 100], ["batch_size", batchSize, 1, 100]]) {
+    if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${key} must be an integer from ${min} to ${max}.`);
+  }
+  if (!["per_object", "checkpoint", "fast"].includes(pacingMode)) throw new Error(`Unknown pacing_mode: ${pacingMode}`);
   const sequenceHost = requestedHost(args);
+  // Check the entire plan before making its first edit. Object-specific native
+  // validation still runs in order so later objects can reference earlier ones.
+  for (let index = 0; index < args.operations.length; index += 1) {
+    const operation = args.operations[index];
+    if (!operation || typeof operation !== "object" || (!actionMap[operation.type] && operation.type !== "wait")) {
+      throw new Error(`Unsupported sequence operation at index ${index}: ${operation?.type}`);
+    }
+    if (operation.type === "wait" && operation.ms !== undefined && (!Number.isFinite(operation.ms) || operation.ms < 0 || operation.ms > 10000)) {
+      throw new Error(`Sequence wait at index ${index} requires ms from 0 to 10000.`);
+    }
+    if (operation.host_application !== undefined) {
+      const operationHost = requestedHost(operation);
+      const requiredHost = lockedHost || (sequenceHost === "auto" ? null : sequenceHost);
+      if (requiredHost && operationHost !== "auto" && operationHost !== requiredHost) {
+        throw new Error(`Sequence operation ${index} requests ${operationHost}, but the sequence target is ${requiredHost}. No object was dispatched for this operation.`);
+      }
+    }
+  }
   const sequenceBackend = await resolveBackend("status", args);
   const results = [];
   const fileRefreshes = [];
+  const batches = [];
+  const started = Date.now();
   let pendingFileRefresh = false;
   let appliedObjects = 0;
+  let currentIndex = 0;
 
   const flushFileRefresh = async (reason) => {
     if (sequenceBackend !== "ooxml" || !pendingFileRefresh) return;
@@ -1041,6 +1083,7 @@ async function runSequence(args) {
 
   try {
     for (let index = 0; index < args.operations.length; index += 1) {
+      currentIndex = index;
       const operation = { ...args.operations[index] };
       const type = operation.type;
       delete operation.type;
@@ -1065,9 +1108,37 @@ async function runSequence(args) {
         const inheritedHost = lockedHost || (sequenceHost === "auto" ? null : sequenceHost);
         if (inheritedHost) operation.host_application = inheritedHost;
       }
-      if (sequenceBackend === "ooxml" && action !== "activate_slide") operation.defer_refresh = true;
-      results.push({ index, type, result: await runBridge(action, operation, sequenceBackend) });
-      appliedObjects += 1;
+      if (sequenceBackend === "ooxml" && action !== "activate_slide") {
+        const untilCheckpoint = pacingMode === "per_object" ? 1 : pacingMode === "checkpoint" ? checkpointSize - appliedObjects % checkpointSize : batchSize;
+        const batchOperations = [];
+        for (let cursor = index; cursor < args.operations.length && batchOperations.length < Math.min(batchSize, untilCheckpoint); cursor += 1) {
+          const next = args.operations[cursor];
+          if (next.type === "wait" || next.type === "activate_slide") break;
+          // Host changes cannot be hidden inside one native bridge call.
+          if (next.host_application !== undefined && next.host_application !== "auto") {
+            const requiredHost = lockedHost || (sequenceHost === "auto" ? null : sequenceHost);
+            if (requiredHost && next.host_application !== requiredHost) throw new Error(`Sequence operation ${cursor} requests ${next.host_application}, but the sequence target is ${requiredHost}.`);
+            if (!requiredHost && next.host_application !== operation.host_application) break;
+          }
+          batchOperations.push({ ...next, pause_after_ms: 0 });
+        }
+        const batch = await runBridge("draw_batch", {
+          operations: batchOperations, host_application: operation.host_application, defer_refresh: true,
+        }, sequenceBackend);
+        batches.push({ first_operation_index: index, operation_count: batchOperations.length, operations_applied: batch.operations_applied, presentation_load_count: batch.presentation_load_count, presentation_save_count: batch.presentation_save_count, elapsed_ms: batch.elapsed_ms });
+        for (const item of batch.results) results.push({ index: index + item.index, type: item.type, result: { ...item.result, focus_policy: focusPolicy, backend_selection: batch.backend_selection } });
+        appliedObjects += batch.operations_applied;
+        pendingFileRefresh ||= batch.operations_applied > 0;
+        if (batch.failure) {
+          const error = new Error(`Sequence operation ${index + batch.failure.index} (${batch.failure.type}) failed: ${batch.failure.error}${batch.failure.recovery_error ? `; prefix recovery failed: ${batch.failure.recovery_error}` : ""}`);
+          error.details = { failed_operation_index: index + batch.failure.index, failed_operation_rolled_back: batch.failed_operation_rolled_back, ...(batch.failure.recovery_error ? { recovery_error: batch.failure.recovery_error } : {}) };
+          throw error;
+        }
+        index += batchOperations.length - 1;
+      } else {
+        results.push({ index, type, result: await runBridge(action, operation, sequenceBackend) });
+        appliedObjects += 1;
+      }
       if (sequenceBackend === "ooxml") {
         if (action === "activate_slide") {
           pendingFileRefresh = false;
@@ -1088,6 +1159,7 @@ async function runSequence(args) {
     } catch (refreshError) {
       error.message = `${error.message}; final OOXML refresh also failed: ${refreshError.message}`;
     }
+    error.details = { failed_operation_index: currentIndex, ...error.details, operations_applied: results.length, object_operations_applied: appliedObjects, batch_count: batches.length, results, file_refreshes: fileRefreshes };
     throw error;
   }
   return {
@@ -1098,6 +1170,10 @@ async function runSequence(args) {
     pacing_mode: pacingMode,
     step_delay_ms: requestedDelay,
     checkpoint_size: checkpointSize,
+    batch_size: batchSize,
+    batch_count: batches.length,
+    batches,
+    elapsed_ms: Date.now() - started,
     context_sync_acknowledged_per_operation: sequenceBackend === "officejs",
     file_refresh_strategy: sequenceBackend === "ooxml" ? pacingMode : "not-applicable",
     file_refresh_count: fileRefreshes.length,
@@ -1107,6 +1183,7 @@ async function runSequence(args) {
 }
 
 async function handleTool(name, args = {}) {
+  if (name === "powerpoint_plan_reconstruction") return { value: planReconstruction(args) };
   if (name === "powerpoint_draw_sequence") return { value: await runSequence(args) };
   if (name === "powerpoint_officejs_status") {
     const value = await officeJsStatus(Number(args.wait_for_connection_ms || 0));
@@ -1254,7 +1331,7 @@ async function handleMessage(message) {
       protocolVersion: SUPPORTED_PROTOCOLS.has(requested) ? requested : "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: "Control Microsoft PowerPoint or WPS Presentation through the platform-selected backend. Windows PowerPoint prefers COM. Mac PowerPoint prefers a connected Office.js task pane and waits for context.sync after every object so drawing is visible; otherwise it reports and uses the file-backed OOXML fallback. WPS uses OOXML. Ordinary drawing preserves the user's foreground application by default; use powerpoint_set_focus_policy(foreground) only when the user explicitly wants PowerPoint/WPS kept in front, and use powerpoint_activate_slide for an intentional visible handoff. Call powerpoint_status, powerpoint_officejs_status when live Mac drawing is requested, and powerpoint_get_capabilities before editing. Never mix live and file-backed objects in one session, never use OS-level mouse or keyboard automation, preserve reconstructable content as native objects, require atomic raster declarations, and run structure plus renderer review after each region and the whole slide.",
+      instructions: "Control Microsoft PowerPoint or WPS Presentation through the platform-selected backend. Windows PowerPoint prefers COM. Mac PowerPoint prefers a connected Office.js task pane and waits for context.sync after every object so drawing is visible; otherwise it reports and uses the file-backed OOXML fallback. WPS uses OOXML. Prefer bounded draw_sequence batches with zero artificial delay; use powerpoint_plan_reconstruction only for uncertain modules and preserve final structure plus visual review. Ordinary drawing preserves the user's foreground application by default; use powerpoint_set_focus_policy(foreground) only when the user explicitly wants PowerPoint/WPS kept in front, and use powerpoint_activate_slide for an intentional visible handoff. Call powerpoint_status, powerpoint_officejs_status when live Mac drawing is requested, and powerpoint_get_capabilities before editing. Never mix live and file-backed objects in one session, never use OS-level mouse or keyboard automation, preserve reconstructable content as native objects, require atomic raster declarations, and run structure plus renderer review at coherent checkpoints and on the final whole slide.",
     });
   }
   if (method === "ping") return rpcResult(id, {});
@@ -1264,7 +1341,7 @@ async function handleMessage(message) {
       const result = await handleTool(params?.name, params?.arguments || {});
       return rpcResult(id, toolResult(result.value, result));
     } catch (error) {
-      return rpcResult(id, toolResult({ error: error.message, tool: params?.name }, { isError: true }));
+      return rpcResult(id, toolResult({ error: error.message, tool: params?.name, ...error.details }, { isError: true }));
     }
   }
   if (method?.startsWith("notifications/")) return null;

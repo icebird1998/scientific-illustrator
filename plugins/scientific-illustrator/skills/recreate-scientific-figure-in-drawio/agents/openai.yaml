@@ -1,4 +1,4 @@
 interface:
   display_name: "draw.io Scientific Drawer"
   short_description: "Build and verify editable scientific figures live in draw.io"
-  default_prompt: "Use $recreate-scientific-figure-in-drawio to draw this figure region by region in draw.io and pass every review gate."
+  default_prompt: "Use $recreate-scientific-figure-in-drawio to build editable modules in efficient batches and correct the figure from current structure and rendered evidence."

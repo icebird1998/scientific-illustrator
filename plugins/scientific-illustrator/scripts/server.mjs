@@ -10,7 +10,7 @@ import { drawioInstallHint, resolveDrawioExecutable } from "./drawio-path.mjs";
 
 const execFileAsync = promisify(execFile);
 const SERVER_NAME = "scientific-illustrator-file-utils";
-const SERVER_VERSION = "1.5.4";
+const SERVER_VERSION = "1.6.0";
 const DRAWIO = resolveDrawioExecutable();
 const MAX_XML_BYTES = 12 * 1024 * 1024;
 const SUPPORTED_PROTOCOLS = new Set(["2024-11-05", "2025-03-26", "2025-06-18"]);

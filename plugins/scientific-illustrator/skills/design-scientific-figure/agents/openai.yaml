@@ -1,4 +1,4 @@
 interface:
   display_name: "Scientific Figure Designer"
   short_description: "Plan clean editable scientific figures for either backend"
-  default_prompt: "Use $design-scientific-figure to create a backend-neutral design spec and drive the four-role quality loop."
+  default_prompt: "Use $design-scientific-figure to plan an editable scientific figure, draw in efficient batches, and refine it from rendered evidence."
