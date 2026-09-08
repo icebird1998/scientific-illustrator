@@ -7,9 +7,10 @@ import path from "node:path";
 import os from "node:os";
 import net from "node:net";
 import { drawioInstallHint, resolveDrawioExecutable } from "./drawio-path.mjs";
+import { planReconstruction, reconstructionPlanTool } from "./adaptive-planner.mjs";
 
 const SERVER_NAME = "drawio-live";
-const SERVER_VERSION = "1.5.4";
+const SERVER_VERSION = "1.6.0";
 const DRAWIO = resolveDrawioExecutable();
 const DEFAULT_PORT = Number(process.env.DRAWIO_LIVE_PORT || 9333);
 const PROFILE_ROOT = process.env.DRAWIO_LIVE_PROFILE || path.join(os.homedir(), ".drawio-live-mcp");
@@ -43,7 +44,8 @@ const live = {
   cdp: null,
   port: DEFAULT_PORT,
   target: null,
-  stepDelayMs: 350,
+  stepDelayMs: 0,
+  cdpCalls: 0,
 };
 
 const pointSchema = {
@@ -74,6 +76,7 @@ const shapeProperties = {
 };
 
 const tools = [
+  reconstructionPlanTool("drawio_live_plan_reconstruction"),
   {
     name: "drawio_live_launch",
     description:
@@ -83,7 +86,7 @@ const tools = [
       properties: {
         file_path: { type: "string", description: "Optional existing .drawio file to open visibly." },
         port: { type: "integer", minimum: 1024, maximum: 65535, default: 9333 },
-        step_delay_ms: { type: "integer", minimum: 0, maximum: 10000, default: 350 },
+        step_delay_ms: { type: "integer", minimum: 0, maximum: 10000, default: 0, description: "Optional per-object playback delay. Zero is the fast default; positive values retain paced drawing." },
         maximize: { type: "boolean", default: true },
         include_screenshot: { type: "boolean", default: true },
       },
@@ -434,7 +437,7 @@ const tools = [
   {
     name: "drawio_live_draw_sequence",
     description:
-      "Execute a paced sequence of shape, edge, update, fit, and wait operations in the visible draw.io editor. Each operation is applied separately with a delay so the user can watch the drawing process.",
+      "Execute ordered editable drawing operations in the visible draw.io editor. Auto mode uses bounded renderer batches with zero delay, preserving the same validation and object order. Positive step delays retain paced playback. Returns exact partial progress on failure and transport/timing statistics; inspect and audit at semantic region boundaries.",
     inputSchema: {
       type: "object",
       required: ["operations"],
@@ -446,6 +449,8 @@ const tools = [
         items: { type: "object", description: "An operation with type: shape, image, line, edge, table, table_cell, table_layout, chart, duplicate, group, ungroup, z_order, align, distribute, update, fit, or wait." },
         },
         step_delay_ms: { type: "integer", minimum: 0, maximum: 10000 },
+        execution_mode: { type: "string", enum: ["auto", "paced", "batched"], default: "auto", description: "Auto batches when the effective step delay is zero. Paced applies each object separately. Batched requires zero step delay." },
+        batch_size: { type: "integer", minimum: 1, maximum: 100, default: 32, description: "Maximum operations per renderer transaction. Wait and fit operations remain ordered boundaries. Each batch is visible and undoable." },
         screenshot_after: { type: "boolean", default: true },
       },
       additionalProperties: false,
@@ -543,8 +548,13 @@ class CdpClient {
   }
 }
 
+function callCdp(method, params = {}) {
+  live.cdpCalls += 1;
+  return live.cdp.call(method, params);
+}
+
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
 function xmlEscape(value = "") {
@@ -658,9 +668,9 @@ async function connectTarget(target) {
   live.cdp = new CdpClient(target.webSocketDebuggerUrl);
   await live.cdp.connect();
   live.target = target;
-  await live.cdp.call("Runtime.enable");
-  await live.cdp.call("Page.enable");
-  await live.cdp.call("Page.bringToFront").catch(() => {});
+  await callCdp("Runtime.enable");
+  await callCdp("Page.enable");
+  await callCdp("Page.bringToFront").catch(() => {});
   await sleep(300);
   await recoverGraphReference().catch(() => false);
 }
@@ -673,7 +683,7 @@ async function ensureConnected() {
 
 async function evaluate(expression, { awaitPromise = true } = {}) {
   await ensureConnected();
-  const result = await live.cdp.call("Runtime.evaluate", {
+  const result = await callCdp("Runtime.evaluate", {
     expression,
     awaitPromise,
     returnByValue: true,
@@ -687,7 +697,7 @@ async function evaluate(expression, { awaitPromise = true } = {}) {
 }
 
 async function getRemoteProperties(objectId, ownProperties = true) {
-  const result = await live.cdp.call("Runtime.getProperties", {
+  const result = await callCdp("Runtime.getProperties", {
     objectId,
     ownProperties,
     accessorPropertiesOnly: false,
@@ -697,7 +707,7 @@ async function getRemoteProperties(objectId, ownProperties = true) {
 }
 
 async function bindRemoteGraph(objectId) {
-  const result = await live.cdp.call("Runtime.callFunctionOn", {
+  const result = await callCdp("Runtime.callFunctionOn", {
     objectId,
     functionDeclaration: "function(){ window.__codexDrawioGraph = this; return !!(this && this.getModel && this.insertVertex); }",
     returnByValue: true,
@@ -707,13 +717,13 @@ async function bindRemoteGraph(objectId) {
 }
 
 async function recoverGraphReference() {
-  const existing = await live.cdp.call("Runtime.evaluate", {
+  const existing = await callCdp("Runtime.evaluate", {
     expression: "!!(window.__codexDrawioGraph && window.__codexDrawioGraph.getModel && window.__codexDrawioGraph.insertVertex)",
     returnByValue: true,
   });
   if (existing.result?.value === true) return true;
 
-  const listeners = await live.cdp.call("Runtime.evaluate", {
+  const listeners = await callCdp("Runtime.evaluate", {
     expression: "document.querySelector('.geDiagramContainer')?.mxListenerList?.map((item) => item.f).filter(Boolean) || []",
     returnByValue: false,
   });
@@ -758,17 +768,29 @@ const graphLookup = `
   };
   const ui = __findUi();
   const graph = window.__codexDrawioGraph || (ui && ui.editor && ui.editor.graph);
-  if (!graph) throw new Error('The draw.io editor graph is not ready. Ensure a blank or existing diagram is open in draw.io.');
+  if (!graph) throw new Error('__DRAWIO_GRAPH_UNAVAILABLE__: The draw.io editor graph is not ready. Ensure a blank or existing diagram is open in draw.io.');
+  const presentation = {
+    setSelectionCell: (...args) => graph.setSelectionCell(...args),
+    setSelectionCells: (...args) => graph.setSelectionCells(...args),
+    scrollCellToVisible: (...args) => graph.scrollCellToVisible(...args),
+  };
 `;
 
 async function graphEval(body) {
   const expression = `(() => { ${graphLookup} ${body} })()`;
   try { new Function(`return ${expression};`); }
   catch (error) { throw new Error(`Internal draw.io graph expression is invalid: ${error.message}`); }
-  await ensureConnected();
-  await recoverGraphReference();
-  return evaluate(expression);
+  try { return await evaluate(expression); }
+  catch (error) {
+    // Retry only a missing-graph lookup, which occurs before any mutation. Never
+    // replay an operation after an arbitrary renderer or transport failure.
+    if (!error.message.includes('__DRAWIO_GRAPH_UNAVAILABLE__')) throw error;
+    if (!await recoverGraphReference()) throw error;
+    return evaluate(expression);
+  }
 }
+
+const directExecution = { evaluate: graphEval, pause: sleep };
 
 async function liveStatus() {
   await ensureConnected();
@@ -789,7 +811,7 @@ async function liveStatus() {
 
 async function captureScreenshot() {
   await ensureConnected();
-  const { data } = await live.cdp.call("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+  const { data } = await callCdp("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
   return data;
 }
 
@@ -861,7 +883,7 @@ function mimeTypeForImage(filePath) {
   return mimeType;
 }
 
-async function addImage(args) {
+async function addImage(args, execution = directExecution) {
   const imagePath = path.resolve(args.image_path);
   const reason = String(args.raster_reason || "").trim();
   if (reason.length < 8) throw new Error("raster_reason must specifically explain why this exact region cannot be recreated with editable draw.io primitives.");
@@ -903,7 +925,7 @@ async function addImage(args) {
   }
   const style = ensureStyle(`shape=image;html=1;imageAspect=${args.preserve_aspect === false ? 0 : 1};aspect=${args.preserve_aspect === false ? "" : "fixed"};image=${imageDataUrl};verticalLabelPosition=bottom;verticalAlign=top;`);
   const payload = JSON.stringify({ ...args, image_path: imagePath, style });
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     if (model.getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
@@ -925,8 +947,8 @@ async function addImage(args) {
     model.beginUpdate();
     try { cell = graph.insertVertex(parent, a.id, metadata, Number(a.x), Number(a.y), Number(a.width), Number(a.height), a.style); }
     finally { model.endUpdate(); }
-    graph.setSelectionCell(cell);
-    graph.scrollCellToVisible(cell);
+    presentation.setSelectionCell(cell);
+    presentation.scrollCellToVisible(cell);
     return {
       id: cell.id,
       type: 'image',
@@ -945,7 +967,7 @@ async function addImage(args) {
       },
     };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
@@ -1000,7 +1022,7 @@ function trimPolylineEndpoints(args) {
   };
 }
 
-async function addLine(args) {
+async function addLine(args, execution = directExecution) {
   const trimmed = trimPolylineEndpoints(args);
   const style = edgeStyle(
     { ...args, start_arrow: args.start_arrow || "none", end_arrow: args.end_arrow || "none" },
@@ -1022,7 +1044,7 @@ async function addLine(args) {
     routed_length: trimmed.routedLength,
     style,
   });
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     if (model.getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
@@ -1047,8 +1069,8 @@ async function addLine(args) {
       if (a.waypoints && a.waypoints.length) geo.points = a.waypoints.map((p) => new mxPoint(Number(p.x), Number(p.y)));
       model.setGeometry(edge, geo);
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(edge);
-    graph.scrollCellToVisible(edge);
+    presentation.setSelectionCell(edge);
+    presentation.scrollCellToVisible(edge);
     return {
       id: edge.id,
       type: 'line',
@@ -1064,29 +1086,15 @@ async function addLine(args) {
       routed_length: a.routed_length,
     };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function addShape(args) {
+async function addShape(args, execution = directExecution) {
   const requestedShape = String(args.shape || "rounded").trim();
   if (!requestedShape) throw new Error("shape must not be empty.");
   const explicitStyleOverride = typeof args.style === "string" && args.style.trim().length > 0;
   const shapeContainsFullStyle = !explicitStyleOverride && /[;=]/.test(requestedShape);
-  if (!explicitStyleOverride && !shapeContainsFullStyle && !BASELINE_SHAPE_SET.has(requestedShape)) {
-    const registration = await graphEval(`
-      const requestedShape = ${JSON.stringify(requestedShape)};
-      const rendererRegistered = typeof mxCellRenderer !== 'undefined' && Object.prototype.hasOwnProperty.call(mxCellRenderer.defaultShapes || {}, requestedShape);
-      const stencilRegistered = typeof mxStencilRegistry !== 'undefined' && (
-        Object.prototype.hasOwnProperty.call(mxStencilRegistry.stencils || {}, requestedShape) ||
-        (typeof mxStencilRegistry.getStencil === 'function' && !!mxStencilRegistry.getStencil(requestedShape))
-      );
-      return { renderer_registered: rendererRegistered, stencil_registered: stencilRegistered };
-    `);
-    if (!registration.renderer_registered && !registration.stencil_registered) {
-      throw new Error(`Unknown or unloaded draw.io shape "${requestedShape}". Scientific Illustrator refused draw.io's silent rectangle fallback. Use a baseline or registered name from drawio_live_get_capabilities, reconstruct the object from editable primitives, supply an intentional full style, or insert only the smallest irreducible raster region with drawio_live_add_image.`);
-    }
-  }
   let style = explicitStyleOverride ? args.style : shapeContainsFullStyle ? requestedShape : shapeStyle(requestedShape);
   style = setStyle(style, "fillColor", args.fill_color);
   style = setStyle(style, "strokeColor", args.stroke_color);
@@ -1094,51 +1102,51 @@ async function addShape(args) {
   style = setStyle(style, "fontSize", args.font_size);
   style = setStyle(style, "strokeWidth", args.stroke_width);
   style = ensureStyle(style);
-  const renderability = await graphEval(`
-    const requestedStyle = ${JSON.stringify(style)};
+  const payload = JSON.stringify({ ...args, requested_shape: requestedShape, validate_requested_name: !explicitStyleOverride && !shapeContainsFullStyle && !BASELINE_SHAPE_SET.has(requestedShape), shape_validation: explicitStyleOverride || shapeContainsFullStyle ? "verified-explicit-style" : "registered-or-baseline", style });
+  const value = await execution.evaluate(`
+    const a = ${payload};
+    const isRegistered = (name) => (
+      (typeof mxCellRenderer !== 'undefined' && Object.prototype.hasOwnProperty.call(mxCellRenderer.defaultShapes || {}, name)) ||
+      (typeof mxStencilRegistry !== 'undefined' && (
+        Object.prototype.hasOwnProperty.call(mxStencilRegistry.stencils || {}, name) ||
+        (typeof mxStencilRegistry.getStencil === 'function' && !!mxStencilRegistry.getStencil(name))
+      ))
+    );
+    if (a.validate_requested_name && !isRegistered(a.requested_shape)) {
+      throw new Error("Unknown or unloaded draw.io shape " + JSON.stringify(a.requested_shape) + ". Scientific Illustrator refused draw.io's silent rectangle fallback. Use a baseline or registered name from drawio_live_get_capabilities, reconstruct the object from editable primitives, supply an intentional full style, or insert only the smallest irreducible raster region with drawio_live_add_image.");
+    }
+    const requestedStyle = a.style;
     const probe = new mxCell('', new mxGeometry(0, 0, 1, 1), requestedStyle);
     probe.setVertex(true);
     const resolvedStyle = graph.getCellStyle(probe) || {};
     const resolvedShape = String(resolvedStyle[mxConstants.STYLE_SHAPE] || 'rectangle');
-    const rendererRegistered = typeof mxCellRenderer !== 'undefined' && Object.prototype.hasOwnProperty.call(mxCellRenderer.defaultShapes || {}, resolvedShape);
-    const stencilRegistered = typeof mxStencilRegistry !== 'undefined' && (
-      Object.prototype.hasOwnProperty.call(mxStencilRegistry.stencils || {}, resolvedShape) ||
-      (typeof mxStencilRegistry.getStencil === 'function' && !!mxStencilRegistry.getStencil(resolvedShape))
-    );
     const namedStyles = graph.getStylesheet?.()?.styles || {};
     const unknownBareTokens = requestedStyle.split(';').map((token) => token.trim()).filter((token) => token && !token.includes('=') &&
       !Object.prototype.hasOwnProperty.call(namedStyles, token) &&
       !(typeof mxCellRenderer !== 'undefined' && Object.prototype.hasOwnProperty.call(mxCellRenderer.defaultShapes || {}, token)) &&
       !(typeof mxStencilRegistry !== 'undefined' && typeof mxStencilRegistry.getStencil === 'function' && !!mxStencilRegistry.getStencil(token))
     );
-    return { resolved_shape: resolvedShape, renderer_registered: rendererRegistered, stencil_registered: stencilRegistered, unknown_bare_tokens: unknownBareTokens };
-  `);
-  if ((!renderability.renderer_registered && !renderability.stencil_registered) || renderability.unknown_bare_tokens.length) {
-    const detail = renderability.unknown_bare_tokens.length
-      ? `unknown style token(s): ${renderability.unknown_bare_tokens.join(", ")}`
-      : `unregistered resolved renderer: ${renderability.resolved_shape}`;
-    throw new Error(`The draw.io style for "${requestedShape}" is not renderable (${detail}). Scientific Illustrator refused the renderer's silent rectangle fallback. Use a baseline or registered capability, reconstruct the object from editable primitives, or insert only the smallest irreducible raster region.`);
-  }
-  const payload = JSON.stringify({ ...args, requested_shape: requestedShape, resolved_shape: renderability.resolved_shape, shape_validation: explicitStyleOverride || shapeContainsFullStyle ? "verified-explicit-style" : "registered-or-baseline", style });
-  const value = await graphEval(`
-    const a = ${payload};
+    if (!isRegistered(resolvedShape) || unknownBareTokens.length) {
+      const detail = unknownBareTokens.length ? 'unknown style token(s): ' + unknownBareTokens.join(', ') : 'unregistered resolved renderer: ' + resolvedShape;
+      throw new Error("The draw.io style for " + JSON.stringify(a.requested_shape) + " is not renderable (" + detail + "). Scientific Illustrator refused the renderer's silent rectangle fallback. Use a baseline or registered capability, reconstruct the object from editable primitives, or insert only the smallest irreducible raster region.");
+    }
     if (graph.getModel().getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
     const parent = graph.getDefaultParent();
     let cell;
     graph.getModel().beginUpdate();
     try { cell = graph.insertVertex(parent, a.id, a.label || '', Number(a.x), Number(a.y), Number(a.width), Number(a.height), a.style); }
     finally { graph.getModel().endUpdate(); }
-    graph.setSelectionCell(cell);
-    graph.scrollCellToVisible(cell);
-    return { id: cell.id, label: graph.convertValueToString(cell), geometry: cell.geometry, style: cell.style, requested_shape: a.requested_shape, resolved_shape: a.resolved_shape, shape_validation: a.shape_validation };
+    presentation.setSelectionCell(cell);
+    presentation.scrollCellToVisible(cell);
+    return { id: cell.id, label: graph.convertValueToString(cell), geometry: cell.geometry, style: cell.style, requested_shape: a.requested_shape, resolved_shape: resolvedShape, shape_validation: a.shape_validation };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function addEdge(args) {
+async function addEdge(args, execution = directExecution) {
   const payload = JSON.stringify({ ...args, style: edgeStyle(args) });
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     if (model.getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
@@ -1156,21 +1164,21 @@ async function addEdge(args) {
         model.setGeometry(edge, geo);
       }
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(edge);
+    presentation.setSelectionCell(edge);
     return { id: edge.id, source: source.id, target: target.id, label: graph.convertValueToString(edge), style: edge.style };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function addTable(args) {
+async function addTable(args, execution = directExecution) {
   const data = args.data || [];
   if (data.length > args.rows) throw new Error(`Table data has ${data.length} rows but rows=${args.rows}.`);
   for (let row = 0; row < data.length; row += 1) {
     if ((data[row] || []).length > args.columns) throw new Error(`Table data row ${row + 1} has more than columns=${args.columns} values.`);
   }
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     if (model.getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
@@ -1208,17 +1216,17 @@ async function addTable(args) {
         }
       }
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(group);
-    graph.scrollCellToVisible(group);
+    presentation.setSelectionCell(group);
+    presentation.scrollCellToVisible(group);
     return { id: group.id, type: 'table', rows: Number(a.rows), columns: Number(a.columns), cell_ids: ids, geometry: group.geometry };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function updateTableCell(args) {
+async function updateTableCell(args, execution = directExecution) {
   const payload = JSON.stringify({ ...args, id: `${args.table_id}-r${args.row}-c${args.column}` });
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const cell = model.getCell(a.id);
@@ -1239,20 +1247,20 @@ async function updateTableCell(args) {
       style = set(style, 'fontSize', a.font_size);
       model.setStyle(cell, style);
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(cell);
-    graph.scrollCellToVisible(cell);
+    presentation.setSelectionCell(cell);
+    presentation.scrollCellToVisible(cell);
     return { id: cell.id, table_id: a.table_id, row: Number(a.row), column: Number(a.column), label: graph.convertValueToString(cell), style: cell.style };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function updateTableLayout(args) {
+async function updateTableLayout(args, execution = directExecution) {
   if (!Array.isArray(args.column_widths) && !Array.isArray(args.row_heights)) {
     throw new Error("Provide column_widths and/or row_heights.");
   }
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const table = model.getCell(a.table_id);
@@ -1298,8 +1306,8 @@ async function updateTableLayout(args) {
       metadata.setAttribute('scientificIllustratorRowHeights', JSON.stringify(heights));
       model.setValue(table, metadata);
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(table);
-    graph.scrollCellToVisible(table);
+    presentation.setSelectionCell(table);
+    presentation.scrollCellToVisible(table);
     return {
       id: table.id,
       type: 'table',
@@ -1310,7 +1318,7 @@ async function updateTableLayout(args) {
       geometry: { x: table.geometry.x, y: table.geometry.y, width: table.geometry.width, height: table.geometry.height },
     };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
@@ -1410,10 +1418,10 @@ function buildChartPlan(args) {
   return { vertices, edges, plot, minimum, maximum };
 }
 
-async function addChart(args) {
+async function addChart(args, execution = directExecution) {
   const plan = buildChartPlan(args);
   const payload = JSON.stringify({ ...args, plan });
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     if (model.getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
@@ -1436,17 +1444,17 @@ async function addChart(args) {
         graph.insertEdge(group, item.id, '', source, target, item.style);
       }
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(group);
-    graph.scrollCellToVisible(group);
+    presentation.setSelectionCell(group);
+    presentation.scrollCellToVisible(group);
     return { id: group.id, type: 'chart', chart_type: a.chart_type, editable_elements: a.plan.vertices.length + a.plan.edges.length, series_count: a.series.length, category_count: a.categories.length, geometry: group.geometry };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function duplicateCell(args) {
+async function duplicateCell(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const source = model.getCell(a.id);
@@ -1471,17 +1479,17 @@ async function duplicateCell(args) {
     model.beginUpdate();
     try { model.add(source.parent || graph.getDefaultParent(), clone); }
     finally { model.endUpdate(); }
-    graph.setSelectionCell(clone);
-    graph.scrollCellToVisible(clone);
+    presentation.setSelectionCell(clone);
+    presentation.scrollCellToVisible(clone);
     return { id: clone.id, source_id: a.id, geometry: clone.geometry, child_count: clone.getChildCount() };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function groupCells(args) {
+async function groupCells(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     if (model.getCell(a.id)) throw new Error('Cell id already exists: ' + a.id);
@@ -1492,33 +1500,33 @@ async function groupCells(args) {
     group.setId(a.id);
     group.setVertex(true);
     const result = graph.groupCells(group, 0, cells);
-    graph.setSelectionCell(result);
-    graph.scrollCellToVisible(result);
+    presentation.setSelectionCell(result);
+    presentation.scrollCellToVisible(result);
     return { id: result.id, member_ids: a.cell_ids, child_count: result.getChildCount(), geometry: result.geometry };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function ungroupCell(args) {
+async function ungroupCell(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const group = model.getCell(a.id);
     if (!group) throw new Error('Cell not found: ' + a.id);
     if (!group.getChildCount()) throw new Error('Cell is not a group or has no members: ' + a.id);
     const members = graph.ungroupCells([group]);
-    graph.setSelectionCells(members);
+    presentation.setSelectionCells(members);
     return { id: a.id, ungrouped: true, member_ids: members.map((cell) => cell.id), member_count: members.length };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function setZOrder(args) {
+async function setZOrder(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const cell = model.getCell(a.id);
@@ -1538,16 +1546,16 @@ async function setZOrder(args) {
         model.add(parent, cell, target);
       }
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(cell);
+    presentation.setSelectionCell(cell);
     return { id: cell.id, command: a.command, z_order_index: parent.getIndex(cell), sibling_count: parent.getChildCount() };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function alignCells(args) {
+async function alignCells(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const cells = a.cell_ids.map((id) => model.getCell(id));
@@ -1602,16 +1610,16 @@ async function alignCells(args) {
     } finally { model.endUpdate(); }
     graph.view.validate();
     const items = cells.map((cell) => ({ id: cell.id, geometry: cell.geometry ? { x: cell.geometry.x, y: cell.geometry.y, width: cell.geometry.width, height: cell.geometry.height } : null, bounds: boundsFor(cell) }));
-    graph.setSelectionCells(cells);
+    presentation.setSelectionCells(cells);
     return { alignment: a.alignment, relative_to: a.relative_to || 'selection', target_coordinate: target, cells: items };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function distributeCells(args) {
+async function distributeCells(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const cells = a.cell_ids.map((id) => model.getCell(id));
@@ -1655,16 +1663,16 @@ async function distributeCells(args) {
     } finally { model.endUpdate(); }
     graph.view.validate();
     const items = ordered.map((item) => ({ id: item.cell.id, geometry: item.cell.geometry ? { x: item.cell.geometry.x, y: item.cell.geometry.y, width: item.cell.geometry.width, height: item.cell.geometry.height } : null, bounds: boundsFor(item.cell) }));
-    graph.setSelectionCells(cells);
+    presentation.setSelectionCells(cells);
     return { direction: a.direction, relative_to: a.relative_to || 'selection', equal_gap: gap, cells: items };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function updateCell(args) {
+async function updateCell(args, execution = directExecution) {
   const payload = JSON.stringify(args);
-  const value = await graphEval(`
+  const value = await execution.evaluate(`
     const a = ${payload};
     const model = graph.getModel();
     const cell = model.getCell(a.id);
@@ -1683,16 +1691,16 @@ async function updateCell(args) {
         model.setGeometry(cell, geo);
       }
     } finally { model.endUpdate(); }
-    graph.setSelectionCell(cell);
-    graph.scrollCellToVisible(cell);
+    presentation.setSelectionCell(cell);
+    presentation.scrollCellToVisible(cell);
     return { id: cell.id, label: graph.convertValueToString(cell), geometry: cell.geometry, style: cell.style };
   `);
-  await sleep(args.pause_after_ms ?? live.stepDelayMs);
+  await execution.pause(args.pause_after_ms ?? live.stepDelayMs);
   return value;
 }
 
-async function fitView(zoomPercent) {
-  return graphEval(`
+async function fitView(zoomPercent, execution = directExecution) {
+  return execution.evaluate(`
     const zoom = ${zoomPercent === undefined ? "null" : Number(zoomPercent)};
     if (zoom == null) graph.fit(20, false, 20, true, false, true);
     else graph.zoomTo(zoom / 100, true);
@@ -1966,9 +1974,157 @@ async function auditFigure(args = {}) {
   `);
 }
 
+const sequenceHandlers = {
+  shape: addShape, image: addImage, line: addLine, edge: addEdge,
+  table: addTable, table_cell: updateTableCell, table_layout: updateTableLayout,
+  chart: addChart, duplicate: duplicateCell, group: groupCells, ungroup: ungroupCell,
+  z_order: setZOrder, align: alignCells, distribute: distributeCells, update: updateCell,
+};
+
+// These operations consult rendered bounds, or can create thousands of child
+// cells. Commit surrounding work first rather than reading stale view state or
+// combining multiple large composites into a single UI-blocking transaction.
+const sequenceBoundaries = new Set(["wait", "fit", "group", "ungroup", "align", "distribute", "table", "chart"]);
+const MAX_BATCH_SOURCE_BYTES = 1024 * 1024;
+
+async function compileSequenceOperation(operation, index) {
+  const bodies = [];
+  await sequenceHandlers[operation.type]({ ...operation, pause_after_ms: 0 }, {
+    evaluate: async (body) => { bodies.push(body); return null; },
+    pause: async () => {},
+  });
+  if (bodies.length !== 1) throw new Error(`Operation ${operation.type} cannot be compiled as one graph action.`);
+  return { index, type: operation.type, id: operation.new_id ?? operation.id ?? operation.table_id, body: bodies[0] };
+}
+
+async function applyRendererBatch(entries) {
+  const actions = entries.map((entry) => `{
+    index: ${entry.index}, type: ${JSON.stringify(entry.type)}, id: ${JSON.stringify(entry.id ?? null)},
+    apply: () => { const presentation = batchPresentation; ${entry.body} }
+  }`).join(",\n");
+  return graphEval(`
+    const results = [];
+    let failure = null;
+    let selected = null;
+    let scrollTarget = null;
+    const batchPresentation = {
+      setSelectionCell: (cell) => { selected = [cell]; },
+      setSelectionCells: (cells) => { selected = cells; },
+      scrollCellToVisible: (cell) => { scrollTarget = cell; },
+    };
+    const actions = [${actions}];
+    const model = graph.getModel();
+    model.beginUpdate();
+    try {
+      for (const action of actions) {
+        try {
+          // Match the per-call CDP value snapshot even if a later operation
+          // changes the same geometry or metadata object.
+          const result = JSON.parse(JSON.stringify(action.apply()));
+          results.push({ index: action.index, type: action.type, result });
+        } catch (error) {
+          failure = { index: action.index, type: action.type, id: action.id, error: error.message || String(error), failed_operation_may_have_mutated: true };
+          break;
+        }
+      }
+    } finally { model.endUpdate(); }
+    if (selected) presentation.setSelectionCells(selected);
+    if (scrollTarget && model.getCell(scrollTarget.id)) presentation.scrollCellToVisible(scrollTarget);
+    // Yield once per bounded batch so the visible renderer can paint. No fixed
+    // per-object sleep or intermediate screenshots are needed.
+    return new Promise((resolve) => setTimeout(() => resolve({ results, failure }), 0));
+  `);
+}
+
+async function drawSequence(args) {
+  if (!Array.isArray(args.operations) || args.operations.length < 1 || args.operations.length > 500) throw new Error("operations must contain 1 to 500 actions.");
+  const requestedMode = args.execution_mode ?? "auto";
+  if (!["auto", "paced", "batched"].includes(requestedMode)) throw new Error("execution_mode must be auto, paced, or batched.");
+  const delay = args.step_delay_ms ?? live.stepDelayMs;
+  if (!Number.isInteger(delay) || delay < 0 || delay > 10000) throw new Error("step_delay_ms must be an integer from 0 to 10000.");
+  const batchSize = args.batch_size ?? 32;
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100) throw new Error("batch_size must be an integer from 1 to 100.");
+  if (requestedMode === "batched" && delay > 0) throw new Error("batched mode requires step_delay_ms=0; use auto or paced for delayed playback.");
+  const mode = requestedMode === "paced" || delay > 0 ? "paced" : "batched";
+  for (let index = 0; index < args.operations.length; index += 1) {
+    const operation = args.operations[index];
+    if (!operation || typeof operation !== "object" || (!Object.hasOwn(sequenceHandlers, operation.type) && !["fit", "wait"].includes(operation.type))) {
+      throw new Error(`Unsupported sequence operation at index ${index}: ${operation?.type}`);
+    }
+    if (operation.type === "wait" && operation.ms !== undefined && (!Number.isFinite(operation.ms) || operation.ms < 0 || operation.ms > 10000)) throw new Error(`wait.ms must be between 0 and 10000 at index ${index}.`);
+  }
+  const startedAt = performance.now();
+  const startingCalls = live.cdpCalls;
+  const results = [];
+  let batches = 0;
+  let delayedMs = 0;
+  let pending = [];
+  let pendingBytes = 0;
+  const executionStats = () => ({ mode, batch_size: batchSize, batches, cdp_calls: live.cdpCalls - startingCalls, elapsed_ms: Math.round((performance.now() - startedAt) * 100) / 100, requested_delay_ms: delayedMs });
+  const fail = (failure) => {
+    const error = new Error(`Sequence stopped ${failure.index == null ? "during renderer batch" : `at index ${failure.index} (${failure.type}${failure.id ? `: ${failure.id}` : ""})`}: ${failure.error}`);
+    error.details = { operations_applied: results.length, results, failure, execution: executionStats() };
+    throw error;
+  };
+  const flush = async () => {
+    if (!pending.length) return;
+    const entries = pending;
+    pending = []; pendingBytes = 0;
+    batches += 1;
+    let response;
+    try { response = await applyRendererBatch(entries); }
+    catch (error) {
+      fail({ index: null, error: error.message, outcome_unknown: true, attempted_indexes: entries.map((entry) => entry.index), recovery: "Inspect the canvas before continuing. Do not replay this batch because some operations may already have applied." });
+    }
+    results.push(...response.results);
+    if (response.failure) fail(response.failure);
+  };
+  for (let index = 0; index < args.operations.length; index += 1) {
+    const operation = args.operations[index];
+    if (mode === "batched" && !sequenceBoundaries.has(operation.type)) {
+      let entry;
+      try { entry = await compileSequenceOperation(operation, index); }
+      catch (error) {
+        await flush();
+        fail({ index, type: operation.type, id: operation.new_id ?? operation.id ?? operation.table_id, error: error.message, failed_operation_may_have_mutated: false });
+      }
+      const bytes = Buffer.byteLength(entry.body);
+      if (pending.length && (pending.length >= batchSize || pendingBytes + bytes > MAX_BATCH_SOURCE_BYTES)) await flush();
+      pending.push(entry); pendingBytes += bytes;
+      if (pending.length >= batchSize || pendingBytes >= MAX_BATCH_SOURCE_BYTES) await flush();
+      continue;
+    }
+    await flush();
+    try {
+      if (operation.type === "wait") {
+        const ms = operation.ms ?? delay;
+        await sleep(ms); delayedMs += ms;
+        results.push({ index, type: operation.type, waited_ms: ms });
+      } else {
+        const result = operation.type === "fit"
+          ? await fitView(operation.zoom_percent)
+          : await sequenceHandlers[operation.type]({ ...operation, pause_after_ms: delay });
+        if (operation.type === "fit") await sleep(delay);
+        delayedMs += delay;
+        results.push({ index, type: operation.type, result });
+      }
+    } catch (error) {
+      fail({ index, type: operation.type, id: operation.new_id ?? operation.id ?? operation.table_id, error: error.message, failed_operation_may_have_mutated: operation.type !== "wait" });
+    }
+  }
+  await flush();
+  let imageData;
+  let screenshotError;
+  if (args.screenshot_after !== false) {
+    try { imageData = await captureScreenshot(); }
+    catch (error) { screenshotError = error.message; }
+  }
+  return { value: { operations_applied: results.length, results, execution: executionStats(), ...(screenshotError ? { screenshot_error: screenshotError, screenshot_recovery: "Drawing completed. Retry drawio_live_screenshot without replaying the drawing operations; visual review is still required." } : {}) }, imageData };
+}
+
 async function launchLive(args) {
   live.port = args.port || DEFAULT_PORT;
-  live.stepDelayMs = args.step_delay_ms ?? 350;
+  live.stepDelayMs = args.step_delay_ms ?? 0;
   let target = null;
   try { target = await findTarget(live.port); } catch {}
   if (!target) {
@@ -1995,8 +2151,8 @@ async function launchLive(args) {
   await connectTarget(target);
   if (args.maximize !== false) {
     try {
-      const result = await live.cdp.call("Browser.getWindowForTarget", { targetId: target.id });
-      await live.cdp.call("Browser.setWindowBounds", { windowId: result.windowId, bounds: { windowState: "maximized" } });
+      const result = await callCdp("Browser.getWindowForTarget", { targetId: target.id });
+      await callCdp("Browser.setWindowBounds", { windowId: result.windowId, bounds: { windowState: "maximized" } });
     } catch {}
   }
   await sleep(1000);
@@ -2005,6 +2161,8 @@ async function launchLive(args) {
 
 async function handleTool(name, args = {}) {
   switch (name) {
+    case "drawio_live_plan_reconstruction":
+      return { value: planReconstruction(args) };
     case "drawio_live_launch": {
       const result = await launchLive(args);
       return { value: result, imageData: args.include_screenshot === false ? undefined : await captureScreenshot() };
@@ -2059,33 +2217,8 @@ async function handleTool(name, args = {}) {
       return { value: await updateCell(args) };
     case "drawio_live_fit":
       return { value: await fitView(args.zoom_percent), imageData: await captureScreenshot() };
-    case "drawio_live_draw_sequence": {
-      const delay = args.step_delay_ms ?? live.stepDelayMs;
-      const results = [];
-      for (let index = 0; index < args.operations.length; index += 1) {
-        const operation = args.operations[index];
-        const type = operation.type;
-        if (type === "shape") results.push({ index, type, result: await addShape({ ...operation, pause_after_ms: delay }) });
-        else if (type === "image") results.push({ index, type, result: await addImage({ ...operation, pause_after_ms: delay }) });
-        else if (type === "line") results.push({ index, type, result: await addLine({ ...operation, pause_after_ms: delay }) });
-        else if (type === "edge") results.push({ index, type, result: await addEdge({ ...operation, pause_after_ms: delay }) });
-        else if (type === "table") results.push({ index, type, result: await addTable({ ...operation, pause_after_ms: delay }) });
-        else if (type === "table_cell") results.push({ index, type, result: await updateTableCell({ ...operation, pause_after_ms: delay }) });
-        else if (type === "table_layout") results.push({ index, type, result: await updateTableLayout({ ...operation, pause_after_ms: delay }) });
-        else if (type === "chart") results.push({ index, type, result: await addChart({ ...operation, pause_after_ms: delay }) });
-        else if (type === "duplicate") results.push({ index, type, result: await duplicateCell({ ...operation, pause_after_ms: delay }) });
-        else if (type === "group") results.push({ index, type, result: await groupCells({ ...operation, pause_after_ms: delay }) });
-        else if (type === "ungroup") results.push({ index, type, result: await ungroupCell({ ...operation, pause_after_ms: delay }) });
-        else if (type === "z_order") results.push({ index, type, result: await setZOrder({ ...operation, pause_after_ms: delay }) });
-        else if (type === "align") results.push({ index, type, result: await alignCells({ ...operation, pause_after_ms: delay }) });
-        else if (type === "distribute") results.push({ index, type, result: await distributeCells({ ...operation, pause_after_ms: delay }) });
-        else if (type === "update") results.push({ index, type, result: await updateCell({ ...operation, pause_after_ms: delay }) });
-        else if (type === "fit") { results.push({ index, type, result: await fitView(operation.zoom_percent) }); await sleep(delay); }
-        else if (type === "wait") { const ms = Math.max(0, Math.min(10000, operation.ms ?? delay)); await sleep(ms); results.push({ index, type, waited_ms: ms }); }
-        else throw new Error(`Unsupported sequence operation at index ${index}: ${type}`);
-      }
-      return { value: { operations_applied: results.length, results }, imageData: args.screenshot_after === false ? undefined : await captureScreenshot() };
-    }
+    case "drawio_live_draw_sequence":
+      return drawSequence(args);
     case "drawio_live_inspect": {
       const maxCells = args.max_cells || 500;
       const value = await graphEval(`
@@ -2184,7 +2317,7 @@ async function handleMessage(message) {
       protocolVersion: SUPPORTED_PROTOCOLS.has(requested) ? requested : "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: "Control only draw.io's own graph API. Use the Designer -> Drawer -> Reviewer -> Corrector loop. Call drawio_live_get_capabilities before reconstruction, keep every reconstructable item editable, require every picture to be one atomic irreducible raster unit, and run drawio_live_audit_figure plus a renderer screenshot after each region and the whole canvas. Use exact alignment/distribution, table layout, text-fit, line-clearance, and routing tools before declaring a gate passed. Never use OS-level mouse, keyboard, or screen control. Save a .drawio snapshot only after live drawing.",
+      instructions: "Control only draw.io's own graph API. Use bounded draw_sequence batches with zero artificial delay by default; preserve object detail and review structure plus renderer at logical checkpoints. Use drawio_live_plan_reconstruction only for uncertain modules, with fresh model observations and feedback. Call drawio_live_get_capabilities before reconstruction, keep every reconstructable item editable, require every picture to be one atomic irreducible raster unit, and run drawio_live_audit_figure plus a renderer screenshot at coherent checkpoints and on the final whole canvas. Use exact alignment/distribution, table layout, text-fit, line-clearance, and routing tools before declaring a gate passed. Never use OS-level mouse, keyboard, or screen control. Save a .drawio snapshot only after live drawing.",
     });
   }
   if (method === "ping") return rpcResult(id, {});
@@ -2194,7 +2327,7 @@ async function handleMessage(message) {
       const result = await handleTool(params?.name, params?.arguments || {});
       return rpcResult(id, toolResult(result.value, { imageData: result.imageData }));
     } catch (error) {
-      return rpcResult(id, toolResult({ error: error.message, tool: params?.name }, { isError: true }));
+      return rpcResult(id, toolResult({ error: error.message, tool: params?.name, ...error.details }, { isError: true }));
     }
   }
   if (method?.startsWith("notifications/")) return null;

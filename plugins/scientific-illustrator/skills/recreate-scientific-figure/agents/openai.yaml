@@ -1,4 +1,4 @@
 interface:
   display_name: "Scientific Figure Reconstruction"
   short_description: "Rebuild references as editable draw.io, PowerPoint, or WPS figures"
-  default_prompt: "Use $recreate-scientific-figure to rebuild this reference panel by panel through the four-role quality loop."
+  default_prompt: "Use $recreate-scientific-figure to rebuild this reference with adaptive editable modules, efficient batches, and targeted visual correction."

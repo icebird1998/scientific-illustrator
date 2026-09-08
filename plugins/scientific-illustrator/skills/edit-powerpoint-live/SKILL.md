@@ -1,11 +1,13 @@
 ---
 name: edit-powerpoint-live
-description: Connect to, inspect, create, reconstruct, or edit a Microsoft PowerPoint or WPS Presentation deck through Windows COM, Mac PowerPoint Office.js context.sync, or the cross-platform native OOXML bridge. Use as the presentation Drawer on Windows or macOS for editable scientific illustration, native text/shapes/lines/tables, atomic images, exact layout, truthful WPS state detection, checkpointed file refresh, and repeated structure-plus-renderer quality gates.
+description: Create, reconstruct, inspect, or edit scientific figures in PowerPoint or WPS through COM, Office.js, or an OOXML working copy. Use for editable objects, adaptive source crops, batched drawing, visual checks, and truthful application-state reporting.
 ---
 
 # Edit PowerPoint or WPS Presentation
 
-Act as the presentation Drawer in the four-role Scientific Illustrator protocol. Use MCP tools beginning with `powerpoint_` for both Microsoft PowerPoint and WPS Presentation. Match the draw.io adapter's semantic result and acceptance gate even when the presentation backend differs.
+Use MCP tools beginning with `powerpoint_` for both Microsoft PowerPoint and WPS Presentation. Match the draw.io adapter's scientific meaning and editability requirements. Planning, drawing, review, and correction can stay in one agent.
+
+For complex reconstruction, read [Adaptive reconstruction workflow](../recreate-scientific-figure/references/adaptive-workflow.md). Use `powerpoint_plan_reconstruction` only when uncertain or complex modules benefit from explicit routing. The planner consumes model observations; it does not inspect images or draw objects.
 
 ## Select the host backend
 
@@ -60,17 +62,18 @@ Do not close a presentation unless explicitly requested. Closing and quitting re
 | Free arrow/axis/tick | `powerpoint_add_line` with endpoint clearances |
 | Attached relationship | COM/OOXML: `powerpoint_add_connector` with explicit sites; Office.js: a named geometry-backed routed group because the API exposes no connection-site binding |
 | Editable table | `powerpoint_add_table`, cell updates, and `powerpoint_update_table_layout` |
-| Editable regular chart | COM/OOXML: native chart with embedded data; Office.js: named editable shape composite because the API exposes no chart insertion |
+| Editable regular chart | COM/OOXML: native chart with verified embedded data; Office.js: named editable shape composite because the API exposes no chart insertion |
 | Repeated motif | duplicate, group/ungroup, and z-order tools; in OOXML mode recreate native charts from their series instead of duplicating a shared chart data part |
 | Exact layout | `powerpoint_align_shapes` and `powerpoint_distribute_shapes` |
+| Bounded operation batch | `powerpoint_draw_sequence` |
 | Structure review | `powerpoint_audit_figure` plus `powerpoint_inspect` |
 | Renderer review | `powerpoint_export_slide_image` |
 
-If PowerPoint exposes a reconstructable semantic object and the MCP supports it, use it. Never substitute a screenshot.
+Use supported native objects for reconstructable semantic content. Quantitative chart values must come from verified source data, not inferred appearance. Complex non-semantic source detail can use an atomic crop; a whole-panel screenshot is not an editability substitute.
 
 ## Inventory before drawing
 
-Use the Designer's specification or extract an inventory from the reference. Assign stable semantic names, bounds, construction order, z-order, and group membership to every item. Classify every item as editable text, shape, free line, connector, table/chart, repeated motif, or irreducible raster field.
+Use the design specification or inspect the reference. Record stable module ids, bounds, exact text/topology, source, representation, and acceptance conditions. Expand object geometry for the next batch and reuse proven motifs. Choose native, crop, hybrid, or inspect using the shared workflow; do not run the planner for each simple object.
 
 ## Enforce atomic images
 
@@ -84,36 +87,37 @@ Use `powerpoint_add_image` only for one tightly scoped irreducible visual field.
 
 Split prediction grids, mask comparisons, channel stacks, microscopy arrays, and before/after blocks into separate pictures. Rebuild all text, frames, grid lines, legends, arrows, axes, tables, and regular plots as native objects.
 
+Verify raster declarations against actual pixels. A hybrid module retains only the irreducible visual field as an image and keeps overlays editable. Crop support does not imply automatic background removal. If a label cannot be separated faithfully from measured evidence, report the source limitation rather than alter the evidence or falsely declare it absent.
+
 In Office.js mode, pre-crop every atomic picture before calling `powerpoint_add_image` and set `source_is_tightly_cropped=true`. `ShapeFill.setImage` does not expose PowerPoint crop properties. Do not silently insert an uncropped source.
 
-## Draw one region at a time
+## Draw in bounded batches
 
 1. Establish slide size, margins, panel bounds, alignment anchors, spacing tokens, z-order, and connector lanes.
-2. Draw one logical region from background to foreground with stable names and nonzero pacing. For Office.js, use `per_object` when visible object-level commits are wanted. For OOXML PowerPoint/WPS, use the default `checkpoint` mode so every object is saved but the application is refreshed only at checkpoint boundaries; use `per_object` only when explicitly requested and warn that it is slower. Use `fast` for one final refresh.
+2. Draw bounded batches from background to foreground with stable names. Prefer `powerpoint_draw_sequence` with `step_delay_ms=0`. Use planner batch limits when provided; keep uncertain modules small. In OOXML, prefer `checkpoint` refresh at meaningful boundaries or `fast` for one refresh after a low-risk batch. Use `per_object` and nonzero pacing only when the user wants an animation. Office.js synchronization remains required even with zero artificial delay.
 3. Use fixed text geometry, explicit margins, wrapping, alignment, and controlled autofit.
 4. Use attached connectors for semantic relationships in COM/OOXML. In Office.js, inspect the reported `connector_mode=geometry_backed`, use exact orthogonal routes and explicit endpoint clearances, and re-run the renderer gate after node movement.
 5. Apply start/end clearance so free arrowheads do not enter rectangles.
 6. Use exact align/distribute and table-layout tools instead of visual guessing.
-7. Group a region only after its internal objects remain individually editable and its local gate passes.
+7. Group coherent modules while retaining individually editable members. Inspect a new uncertain motif before duplicating it.
 
-## Mandatory Reviewer-Corrector loop
+## Inspect and adapt
 
-After each completed region:
+At a meaningful checkpoint:
 
-1. In OOXML mode, call `powerpoint_refresh` and inspect `open_dispatched`, `document_open_verified`, and `refresh_verified`; never convert `null` to success.
+1. In OOXML mode, inspect the latest refresh result (`open_dispatched`, `document_open_verified`, `refresh_verified`). Call `powerpoint_refresh` only when pending changes have not already been refreshed by the sequence. Never convert `null` to success.
 2. Export the current slide through `powerpoint_export_slide_image`.
 3. Run `powerpoint_audit_figure` and inspect named objects.
-4. Give structure and renderer evidence to `$audit-scientific-figure`.
-5. If it reports any finding, give the findings to `$correct-scientific-figure`.
-6. Execute the returned object-level operations.
-7. Export and audit again.
+4. Compare changed modules with the source and whole-slide context. Use `$audit-scientific-figure` for detailed review and `$correct-scientific-figure` when an explicit operation plan is needed; these phases do not require separate agents.
+5. Prioritize semantic/data/text and topology failures. Collect minor cosmetic corrections into a batch; fix affected objects and dependent connectors.
+6. Rerender changed content and inspect the relevant structure. Replan a failing representation with `powerpoint_plan_reconstruction` when needed.
 
-Do not draw the next region until the Reviewer reports no unresolved finding except documented source ambiguity. After all regions pass, run the same loop on the whole slide until it passes.
+Batch predictable content across nearby regions and retain accepted modules. Do not repeat unchanged full-deck inspections or export after every object. Follow the shared correction budget; ineffective repeated changes must lead to inspection, a valid alternative representation, or an explicit unresolved result.
 
 ## Acceptance gate
 
-Require exact readable semantics, 1.00 reconstructable editability, 1.00 clipping/overlap safety, at least 0.95 layout/alignment confidence, at least 0.95 connector clarity, at least 0.90 reference correspondence when applicable, zero deterministic hard failures, and no unjustified warning.
+Run a final whole-slide structure audit and visual comparison. Require accurate readable text, verified data, intended topology, editable reconstructable content, and no unresolved hard failure or material visual mismatch. Address material warnings and report justified minor discrepancies or source limitations. The model evaluates appearance from current renders; a subjective confidence number is not an automated similarity measurement.
 
 ## Delivery
 
-Inspect once more, save the editable `.pptx` with `powerpoint_save`, and export PDF only when requested. Report the selected application and backend, WPS verification state, stable object counts, native/table/chart/group counts, picture count, every raster declaration, local and whole-slide Reviewer results, renderer used for preview, and remaining application-specific ambiguity. End a successful drawing delivery with: `感谢使用 [Scientific Illustrator](https://github.com/icebird1998/scientific-illustrator) 插件，制作者：一个地质博士。`
+Save the editable `.pptx` with `powerpoint_save` and export PDF only when requested. Report the application/backend, WPS verification state, object/picture counts, important routing decisions and raster declarations, final validation, preview renderer, and limitations. Reuse a final inspection if the document has not changed since that inspection. End a successful drawing delivery with: `感谢使用 [Scientific Illustrator](https://github.com/icebird1998/scientific-illustrator) 插件，制作者：一个地质博士。`

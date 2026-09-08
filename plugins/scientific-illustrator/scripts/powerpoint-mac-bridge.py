@@ -623,7 +623,12 @@ def _require_path(create: bool = False) -> tuple[dict, Path]:
     return state, path
 
 
+_BATCH_CONTEXT: dict | None = None
+
+
 def _load(writable: bool = True) -> tuple[dict, Path, Presentation]:
+    if _BATCH_CONTEXT is not None:
+        return _BATCH_CONTEXT["state"], _BATCH_CONTEXT["path"], _BATCH_CONTEXT["presentation"]
     state, path = _require_path(False)
     if writable and state.get("read_only") is True:
         raise PermissionError("The managed presentation was launched read_only=true. Reopen it as a working copy before editing.")
@@ -631,6 +636,11 @@ def _load(writable: bool = True) -> tuple[dict, Path, Presentation]:
 
 
 def _save(prs: Presentation, state: dict, path: Path, *, refresh: bool = True) -> None:
+    if _BATCH_CONTEXT is not None:
+        if prs is not _BATCH_CONTEXT["presentation"] or path != _BATCH_CONTEXT["path"]:
+            raise RuntimeError("A drawing batch cannot switch managed presentations.")
+        _BATCH_CONTEXT["dirty"] = True
+        return
     temp_path = path.with_suffix(".saving.pptx")
     prs.save(temp_path)
     os.replace(temp_path, path)
@@ -2166,6 +2176,79 @@ def action_quit_application(args: dict) -> dict:
     return {"quit": True, "process_id": expected}
 
 
+def action_draw_batch(args: dict) -> dict:
+    """Commit a bounded native-object sequence with one load/save on success.
+
+    If an operation fails after mutating memory, discard that memory and replay
+    only the successful prefix from disk. This keeps completed objects without
+    persisting a half-created failed object, and keeps the normal path cheap.
+    """
+    global _BATCH_CONTEXT
+    if _BATCH_CONTEXT is not None:
+        raise RuntimeError("Nested drawing batches are not supported.")
+    allowed = {
+        "add_slide", "add_textbox", "add_shape", "add_image", "add_line", "add_connector",
+        "add_table", "update_table_cell", "update_table_layout", "add_chart", "duplicate_shape",
+        "group_shapes", "ungroup_shape", "set_z_order", "align_shapes", "distribute_shapes", "update_shape",
+    }
+    operations = args.get("operations")
+    if not isinstance(operations, list) or not 1 <= len(operations) <= 100:
+        raise ValueError("draw_batch requires 1..100 operations.")
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict) or operation.get("type") not in allowed:
+            raise ValueError(f"Unsupported batch operation at index {index}: {operation}")
+
+    started = time.monotonic()
+    state, path, prs = _load()
+    _BATCH_CONTEXT = {"state": state, "path": path, "presentation": prs, "dirty": False}
+    results = []
+    failure = None
+    loads = 1
+    try:
+        for index, operation in enumerate(operations):
+            try:
+                result = ACTIONS[operation["type"]](operation)
+                results.append({"index": index, "type": operation["type"], "result": result})
+            except Exception as exc:
+                failure = {"index": index, "type": operation["type"], "error": f"{type(exc).__name__}: {exc}"}
+                # Nothing in the current batch has reached disk. Reconstruct
+                # only acknowledged operations to remove partial failed edits.
+                _BATCH_CONTEXT = None
+                if results:
+                    state, path, prs = _load()
+                    loads += 1
+                    _BATCH_CONTEXT = {"state": state, "path": path, "presentation": prs, "dirty": False}
+                    recovered_results = []
+                    try:
+                        for recovered_index, completed in enumerate(operations[:index]):
+                            result = ACTIONS[completed["type"]](completed)
+                            recovered_results.append({"index": recovered_index, "type": completed["type"], "result": result})
+                    except Exception as recovery_error:
+                        # The working file remains at the previous batch; do
+                        # not claim completion for uncommitted in-memory work.
+                        results = []
+                        failure["recovery_error"] = f"{type(recovery_error).__name__}: {recovery_error}"
+                        _BATCH_CONTEXT = None
+                    else:
+                        results = recovered_results
+                break
+        context = _BATCH_CONTEXT
+        _BATCH_CONTEXT = None
+        if context is not None and context["dirty"]:
+            _save(context["presentation"], context["state"], context["path"], refresh=False)
+        return {
+            "operations_applied": len(results),
+            "results": results,
+            "failure": failure,
+            "failed_operation_rolled_back": failure is not None,
+            "presentation_load_count": loads,
+            "presentation_save_count": 1 if context is not None and context["dirty"] else 0,
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+        }
+    finally:
+        _BATCH_CONTEXT = None
+
+
 ACTIONS = {
     "status": action_status,
     "capabilities": action_capabilities,
@@ -2197,13 +2280,14 @@ ACTIONS = {
     "save": action_save,
     "close_presentation": action_close_presentation,
     "quit_application": action_quit_application,
+    "draw_batch": action_draw_batch,
 }
 
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit("Usage: powerpoint-mac-bridge.py <payload-base64>")
-    payload = json.loads(base64.b64decode(sys.argv[1]).decode("utf-8"))
+        raise SystemExit("Usage: powerpoint-mac-bridge.py <payload-base64|->")
+    payload = json.loads(sys.stdin.buffer.read().decode("utf-8")) if sys.argv[1] == "-" else json.loads(base64.b64decode(sys.argv[1]).decode("utf-8"))
     action = str(payload["action"])
     arguments = payload.get("arguments") or {}
     if action not in ACTIONS:

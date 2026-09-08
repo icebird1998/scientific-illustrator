@@ -1,4 +1,4 @@
 interface:
   display_name: "Live PowerPoint and WPS Scientific Drawer"
   short_description: "Draw editable figures with COM, Office.js context.sync, or OOXML"
-  default_prompt: "Use $edit-powerpoint-live to select the safest live backend, draw this figure region by region in PowerPoint or WPS, and pass every review gate."
+  default_prompt: "Use $edit-powerpoint-live to choose the supported PowerPoint or WPS backend, draw in bounded batches, and refine the editable figure from rendered evidence."

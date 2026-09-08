@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0 — Unreleased
+
+- Removed default artificial sequence waits. draw.io batches graph operations into bounded renderer transactions and avoids redundant connection probes, selection, and scrolling; explicit paced drawing remains available.
+- Batched file-backed PowerPoint/WPS native operations into one Python process and one PPTX load/save per batch. Checkpoints and explicit waits preserve application refresh boundaries. COM and Office.js keep their existing execution paths.
+- Added exact partial-progress reporting, transport uncertainty, screenshot-only retry guidance, and OOXML failed-operation rollback with successful-prefix recovery. A draw.io failed operation can still have partial effects and must be inspected before resuming; a batch has one undo transaction.
+- Added read-only reconstruction planner tools for both backends. The calling model supplies module observations and feedback; the planner recommends native objects, atomic crops, hybrid decomposition, or closer inspection. It does not perform pixel analysis or background removal.
+- Replaced mechanical per-region review loops with bounded risk-based checkpoints, reviewed motif reuse, targeted corrections, and a final whole-figure structure and renderer review. Scientific meaning, verified chart data, native text/connectors, and explicit editability requirements remain acceptance conditions.
+- Added routing, MCP contract, batch-equivalence, failure-recovery, and large Unicode payload regression tests. Excluded generated Python bytecode from the source portability scan.
+- Performance measurements cover backend execution and do not establish universal visual equivalence for arbitrary reference figures or application-refresh speed; verify final renders in the selected application.
+
 ## 1.5.4 — 2026-08-08
 
 - Updated the author, developer, Office add-in provider, task-pane, license, README, and successful-delivery attribution to `一个地质博士`.
