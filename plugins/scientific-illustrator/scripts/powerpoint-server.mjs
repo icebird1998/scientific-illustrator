@@ -375,7 +375,9 @@ const tools = [
         data: {
           type: "array",
           maxItems: 200,
-          items: { type: "array", maxItems: 100, items: { type: ["string", "number", "boolean", "null"] } },
+          // Cell values use anyOf instead of a union `type: [...]` array: some OpenAI/Anthropic/Gemini-compatible
+          // providers reject union type arrays inside `items` with "field predicate failed: $type == Type.ARRAY".
+          items: { type: "array", maxItems: 100, items: { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }] } },
         },
         ...positionProperties,
         ...textStyleProperties,
@@ -465,7 +467,8 @@ const tools = [
         name: { type: "string" },
         chart_type: { type: "string", description: "Friendly plugin_name or Office XlChartType enum name returned by powerpoint_get_capabilities." },
         chart_type_id: { type: "integer", minimum: -10000, maximum: 10000 },
-        categories: { type: "array", minItems: 1, maxItems: 1000, items: { type: ["string", "number"] } },
+        // See the note on add_table `data` above: union `type` arrays inside `items` are rejected by strict providers.
+        categories: { type: "array", minItems: 1, maxItems: 1000, items: { anyOf: [{ type: "string" }, { type: "number" }] } },
         series: {
           type: "array",
           minItems: 1,

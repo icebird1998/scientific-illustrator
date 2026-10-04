@@ -228,7 +228,9 @@ const tools = [
         id: { type: "string" },
         rows: { type: "integer", minimum: 1, maximum: 200 },
         columns: { type: "integer", minimum: 1, maximum: 100 },
-        data: { type: "array", maxItems: 200, items: { type: "array", maxItems: 100, items: { type: ["string", "number", "boolean", "null"] } } },
+        // Cell values use anyOf instead of a union `type: [...]` array: some OpenAI/Anthropic/Gemini-compatible
+        // providers reject union type arrays inside `items` with "field predicate failed: $type == Type.ARRAY".
+        data: { type: "array", maxItems: 200, items: { type: "array", maxItems: 100, items: { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }] } } },
         x: { type: "number" },
         y: { type: "number" },
         width: { type: "number", exclusiveMinimum: 0 },
@@ -294,7 +296,8 @@ const tools = [
       properties: {
         id: { type: "string" },
         chart_type: { type: "string", enum: ["column_clustered", "bar_clustered", "line", "scatter"] },
-        categories: { type: "array", minItems: 1, maxItems: 1000, items: { type: ["string", "number"] } },
+        // See the note on `data` above: union `type` arrays inside `items` are rejected by strict providers.
+        categories: { type: "array", minItems: 1, maxItems: 1000, items: { anyOf: [{ type: "string" }, { type: "number" }] } },
         series: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", required: ["name", "values"], properties: { name: { type: "string" }, values: { type: "array", minItems: 1, maxItems: 1000, items: { type: "number" } } }, additionalProperties: false } },
         x: { type: "number" },
         y: { type: "number" },

@@ -134,22 +134,35 @@ const tools = [
               exit_y: { type: "number", minimum: 0, maximum: 1 },
               entry_x: { type: "number", minimum: 0, maximum: 1 },
               entry_y: { type: "number", minimum: 0, maximum: 1 },
-              source_point: { $ref: "#/$defs/point" },
-              target_point: { $ref: "#/$defs/point" },
-              waypoints: { type: "array", maxItems: 100, items: { $ref: "#/$defs/point" } },
+              // `point` is inlined instead of using $ref "#/$defs/point": some OpenAI/Anthropic-compatible
+              // providers drop root $defs and then fail schema validation with "Pointer '/$defs/point' does not exist".
+              source_point: {
+                type: "object",
+                required: ["x", "y"],
+                properties: { x: { type: "number" }, y: { type: "number" } },
+                additionalProperties: false,
+              },
+              target_point: {
+                type: "object",
+                required: ["x", "y"],
+                properties: { x: { type: "number" }, y: { type: "number" } },
+                additionalProperties: false,
+              },
+              waypoints: {
+                type: "array",
+                maxItems: 100,
+                items: {
+                  type: "object",
+                  required: ["x", "y"],
+                  properties: { x: { type: "number" }, y: { type: "number" } },
+                  additionalProperties: false,
+                },
+              },
             },
             additionalProperties: false,
           },
         },
         overwrite: { type: "boolean", default: false },
-      },
-      $defs: {
-        point: {
-          type: "object",
-          required: ["x", "y"],
-          properties: { x: { type: "number" }, y: { type: "number" } },
-          additionalProperties: false,
-        },
       },
       additionalProperties: false,
     },
